@@ -1,0 +1,7 @@
+include README.md
+include deploy.md
+include LICENSE
+include requirements*.txt
+include .env.example
+recursive-include ragebot *.py
+recursive-include tests *.py
