@@ -98,7 +98,7 @@ class RageBotEngine:
         files   = scanner.scan()
         return {"path": str(self.project_path), "file_count": len(files)}
 
-    def save(self, incremental: bool = True, snapshot_name: Optional[str] = None) -> dict:
+    def save(self, incremental: bool = True, snapshot_name: Optional[str] = None, progress_callback: Optional[callable] = None) -> dict:
         """Index (or re-index) the project directory."""
         self.rage_dir.mkdir(parents=True, exist_ok=True)
         self.db.init_schema()
@@ -109,9 +109,13 @@ class RageBotEngine:
         doc_parser  = DocumentParser()
 
         indexed = skipped = total_tokens = 0
+        total_files = len(all_files)
 
-        for file_path in all_files:
+        for i, file_path in enumerate(all_files):
             rel = str(file_path.relative_to(self.project_path))
+            if progress_callback:
+                progress_callback(i + 1, total_files, rel)
+            
             fhash = self._hash_file(file_path)
 
             if incremental and self.db.is_indexed(rel, fhash):
@@ -132,13 +136,13 @@ class RageBotEngine:
                 chunks = parsed.get("chunks", [content[:2000]])
                 max_chunks = self.config.get_int("max_chunks_per_file", 20)
 
-                for i, chunk in enumerate(chunks[:max_chunks]):
+                for j, chunk in enumerate(chunks[:max_chunks]):
                     if not chunk.strip():
                         continue
                     embedding = self.embedder.embed(chunk)
                     total_tokens += self._token_counter.count(chunk)
                     self.db.upsert_chunk(
-                        file_path=rel, chunk_index=i, content=chunk,
+                        file_path=rel, chunk_index=j, content=chunk,
                         embedding=embedding, file_hash=fhash,
                         metadata=json.dumps({
                             "type":      parsed.get("type", "unknown"),

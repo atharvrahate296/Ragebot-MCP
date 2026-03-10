@@ -18,7 +18,7 @@ from rich import print as rprint
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
-from rich.progress import Progress, SpinnerColumn, TextColumn
+from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, MofNCompleteColumn
 from rich.prompt import Prompt
 from rich.syntax import Syntax
 from rich.table import Table
@@ -26,6 +26,8 @@ from rich.table import Table
 from ragebot.core.config  import ConfigManager
 from ragebot.core.engine  import RageBotEngine
 from ragebot.utils.display import Display
+import questionary
+
 
 # ── App & globals ─────────────────────────────────────────────────────────────
 app = typer.Typer(
@@ -46,7 +48,12 @@ def _engine(path: str = ".") -> RageBotEngine:
 
 
 def _spin(msg: str) -> Progress:
-    return Progress(SpinnerColumn(), TextColumn(f"[cyan]{msg}"), console=console, transient=True)
+    return Progress(
+        SpinnerColumn(spinner_name="dots"),
+        TextColumn("[bold cyan]{task.description}"),
+        console=console,
+        transient=True
+    )
 
 
 _PROVIDER_META = {
@@ -56,19 +63,30 @@ _PROVIDER_META = {
 
 
 def _select_provider(prompt_msg: str = "Select a provider") -> str:
-    from rich.columns import Columns
-    items = []
-    for i, p in enumerate(PROVIDERS, 1):
-        meta = _PROVIDER_META.get(p, {"icon": "•", "color": "white", "label": p.title(), "desc": ""})
-        items.append(Panel(
-            f"[bold {meta['color']}]{meta['icon']}  {meta['label']}[/bold {meta['color']}]\n[dim]{meta['desc']}[/dim]",
-            border_style=meta["color"], title=f"[bold yellow]{i}[/bold yellow]", title_align="left", width=34, padding=(1, 2),
+    choices = []
+    for p in PROVIDERS:
+        meta = _PROVIDER_META.get(p, {"icon": "•", "color": "white", "label": p.title()})
+        choices.append(questionary.Choice(
+            title=[
+                ("class:icon", f"{meta['icon']} "),
+                ("class:label", meta["label"]),
+            ],
+            value=p
         ))
-    console.print(f"\n[bold cyan]{prompt_msg}:[/bold cyan]\n")
-    console.print(Columns(items, padding=(0, 2)))
-    console.print()
-    choice = Prompt.ask("[bold]Enter choice[/bold]", choices=[str(i) for i in range(1, len(PROVIDERS) + 1)])
-    selected = PROVIDERS[int(choice) - 1]
+    
+    selected = questionary.select(
+        prompt_msg,
+        choices=choices,
+        style=questionary.Style([
+            ("icon", f"fg:{_PROVIDER_META['gemini']['color']}"),
+            ("label", "bold"),
+            ("selected", "fg:cyan bold"),
+        ])
+    ).ask()
+    
+    if not selected:
+        return PROVIDERS[0]
+        
     meta = _PROVIDER_META.get(selected, {})
     console.print(f"  → [bold green]{meta.get('icon', '•')}  {meta.get('label', selected.title())}[/bold green]\n")
     return selected
@@ -92,28 +110,29 @@ def _get_model_category(model_id: str) -> tuple[str, str]:
 
 
 def _select_model(provider: str) -> str:
-    from rich.rule import Rule
     from ragebot.llm.models import PROVIDER_MODELS, PROVIDER_DEFAULTS
     models = PROVIDER_MODELS.get(provider, [])
     default_model = PROVIDER_DEFAULTS.get(provider, "")
     if not models:
         return default_model
-    console.print(Panel(f"[bold]Choose a model for [cyan]{provider.title()}[/cyan][/bold]", border_style="cyan", padding=(0, 2)))
-    current_cat = ""
-    for i, m in enumerate(models, 1):
-        cat_name, cat_color = _get_model_category(m["id"])
-        if cat_name != current_cat:
-            current_cat = cat_name
-            console.print(Rule(f"[bold {cat_color}]{cat_name}[/bold {cat_color}]", style=cat_color))
-        default_badge = "  [black on green] DEFAULT [/black on green]" if m["id"] == default_model else ""
-        console.print(f"  [bold yellow]{i:>2}[/bold yellow]  │  [bold]{m['name']}[/bold]{default_badge}\n       │  [dim]{m['id']}[/dim]\n       │  {m['description']}")
-        console.print()
-    console.print(Rule(style="dim"))
-    choice = Prompt.ask(f"[bold]Select model [dim](1-{len(models)}, default=1)[/dim][/bold]", default="1")
-    valid = [str(i) for i in range(1, len(models) + 1)]
-    selected = models[int(choice) - 1] if choice in valid else models[0]
+    
+    choices = [
+        questionary.Choice(title=f"{m['name']} ({m['id']})", value=m["id"])
+        for m in models
+    ]
+    
+    selected_id = questionary.select(
+         f"Select a model for {provider.title()}:",
+         choices=choices,
+         default=default_model if any(m["id"] == default_model for m in models) else None
+    ).ask()
+    
+    if not selected_id:
+        selected_id = models[0]["id"]
+        
+    selected = next(m for m in models if m["id"] == selected_id)
     console.print(Panel(f"[bold green]✓  {selected['name']}[/bold green]\n[dim]{selected['id']}[/dim]", border_style="green", title="[bold]Selected Model[/bold]", title_align="left", padding=(0, 2)))
-    return selected["id"]
+    return selected_id
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -135,6 +154,7 @@ _REPL_COMMANDS: dict[str, str] = {
     "config":   "Manage settings",
     "version":  "Show version info",
     "help":     "Show this help",
+    "list":     "List available models",
     "exit":     "Exit the session",
 }
 
@@ -230,6 +250,9 @@ def _run_interactive_repl():
             p = parts[1] if len(parts) > 1 else "."
             cmd_context(path=p)
             continue
+        elif cmd_name == "list":
+            cmd_list()
+            continue
 
         # ── Question (default) ────────────────────────────────────────────
         messages.append({"role": "user", "content": raw_input})
@@ -268,8 +291,10 @@ def cmd_init(
     """🚀 Initialise RageBot for a project directory."""
     try:
         eng = _engine(path)
-        with _spin("Initialising…"):
+        with _spin("Initialising RageBot…") as progress:
+            task = progress.add_task("Initialising…", total=None)
             result = eng.initialize(force=force)
+            progress.update(task, description=f"Initialised [bold]{result['file_count']}[/bold] files")
         display.success(f"Initialised at [bold]{result['path']}[/bold]")
         display.info(f"RageBot tables created securely.")
         display.info(f"[bold]{result['file_count']}[/bold] indexable files found.")
@@ -288,12 +313,20 @@ def cmd_save(
     try:
         eng = _engine(path)
         # Check if initialized, if not, do it now
-        if not (eng.project_path / ".ragebot" / "ragebot.db").exists():
-            display.info("Project not initialized — running init first…")
-            eng.initialize()
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[bold cyan]{task.description}"),
+            BarColumn(bar_width=40),
+            MofNCompleteColumn(),
+            console=console,
+            transient=True,
+        ) as progress:
+            task = progress.add_task("Indexing...", total=100)
             
-        with _spin("Indexing project…"):
-            result = eng.save(incremental=incremental, snapshot_name=snapshot_name)
+            def update_prog(current, total, filename):
+                progress.update(task, total=total, completed=current, description=f"Indexing [dim]{filename[:30]}...[/dim]")
+
+            result = eng.save(incremental=incremental, snapshot_name=snapshot_name, progress_callback=update_prog)
 
         table = Table(title="📊 Indexing Summary", box=None, show_header=True, header_style="bold cyan")
         table.add_column("Metric", style="cyan", min_width=20)
@@ -464,6 +497,31 @@ def cmd_context(path: str = ".", tree: bool = False):
             for k, v in stats.items(): console.print(f"{k}: {v}")
     except Exception as e: display.error(f"Error: {e}")
 
+
+@app.command("list")
+def cmd_list():
+    """📜 List available models for the current provider."""
+    try:
+        cfg = ConfigManager()
+        provider = cfg.get("llm_provider", "gemini")
+        from ragebot.llm.models import PROVIDER_MODELS
+        models = PROVIDER_MODELS.get(provider, [])
+        
+        table = Table(title=f"📜 Available Models for {provider.title()}", box=None, header_style="bold cyan")
+        table.add_column("Model Name", style="bold yellow")
+        table.add_column("ID", style="dim")
+        table.add_column("Description")
+        
+        current_model = cfg.get(f"{provider}_model", "")
+        
+        for m in models:
+            is_active = "[green]●[/green] " if m["id"] == current_model else "  "
+            table.add_row(f"{is_active}{m['name']}", m["id"], m["description"])
+        
+        console.print(table)
+    except Exception as e:
+        display.error(f"Error listing models: {e}")
+
 # ── AUTH ──────────────────────────────────────────────────────────────────────
 auth_app = typer.Typer(help="🔐 Manage API keys", invoke_without_command=True)
 app.add_typer(auth_app, name="auth")
@@ -471,7 +529,16 @@ app.add_typer(auth_app, name="auth")
 def _do_auth_menu():
     console.print()
     console.print(Panel("[bold cyan]🔐  RageBot Auth Manager[/bold cyan]", border_style="cyan", padding=(1, 3)))
-    choice = Prompt.ask("\n[bold]1. Login  2. Logout  3. Status  4. Switch[/bold]", choices=["1","2","3","4"])
+    choice = questionary.select(
+        "Select an action:",
+        choices=[
+            questionary.Choice("Login", value="1"),
+            questionary.Choice("Logout", value="2"),
+            questionary.Choice("Status", value="3"),
+            questionary.Choice("Switch Provider", value="4"),
+            questionary.Choice("Cancel", value="5"),
+        ]
+    ).ask()
     if choice == "1": _do_login_interactive()
     elif choice == "2": _do_logout_interactive()
     elif choice == "3": _do_auth_status()
@@ -482,9 +549,8 @@ def auth_callback(ctx: typer.Context):
     if ctx.invoked_subcommand is None: _do_auth_menu()
 
 def _do_login_interactive(provider: str | None = None):
-    import getpass
     if not provider: provider = _select_provider()
-    key = getpass.getpass("  API Key: ").strip()
+    key = questionary.password("  API Key: ").ask()
     if key: 
         cfg = ConfigManager()
         cfg.set(f"{provider}_api_key", key)

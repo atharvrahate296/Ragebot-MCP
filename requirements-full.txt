@@ -6,6 +6,7 @@
 
 # Core
 -r requirements.txt
+questionary>=2.0.0
 
 # ── LLM providers ─────────────────────────────────────────────────────────────
 # Google Gemini
