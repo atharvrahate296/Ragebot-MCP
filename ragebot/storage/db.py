@@ -78,19 +78,32 @@ class Database:
             """, (file_path, file_hash, file_type, summary, metadata, time.time()))
 
     def get_file(self, file_path: str) -> Optional[dict]:
-        row = self.conn.execute(
-            "SELECT * FROM files WHERE file_path=?", (file_path,)
-        ).fetchone()
-        return dict(row) if row else None
+        """Fetch a single file record by path, handling missing tables."""
+        try:
+            row = self.conn.execute(
+                "SELECT * FROM files WHERE file_path=?", (file_path,)
+            ).fetchone()
+            return dict(row) if row else None
+        except sqlite3.OperationalError:
+            return None
 
     def get_all_files(self) -> list[dict]:
-        return [dict(r) for r in
-                self.conn.execute("SELECT * FROM files ORDER BY indexed_at DESC").fetchall()]
+        """Fetch all file records, handling missing tables."""
+        try:
+            return [dict(r) for r in
+                    self.conn.execute("SELECT * FROM files ORDER BY indexed_at DESC").fetchall()]
+        except sqlite3.OperationalError:
+            return []
 
     def is_indexed(self, file_path: str, file_hash: str) -> bool:
-        return self.conn.execute(
-            "SELECT 1 FROM files WHERE file_path=? AND file_hash=?", (file_path, file_hash)
-        ).fetchone() is not None
+        """Check if a file with given hash is already indexed."""
+        try:
+            row = self.conn.execute(
+                "SELECT 1 FROM files WHERE file_path=? AND file_hash=?", (file_path, file_hash)
+            ).fetchone()
+            return row is not None
+        except sqlite3.OperationalError:
+            return False
 
     def delete_file(self, file_path: str) -> None:
         with self.conn:
@@ -112,39 +125,51 @@ class Database:
             """, (file_path, chunk_index, content, json.dumps(embedding), file_hash, metadata, time.time()))
 
     def get_all_chunks(self) -> list[dict]:
-        return [dict(r) for r in
-                self.conn.execute(
-                    "SELECT file_path, chunk_index, content, embedding, metadata FROM chunks"
-                ).fetchall()]
+        """Fetch all chunks across the project, handling missing tables."""
+        try:
+            return [dict(r) for r in
+                    self.conn.execute(
+                        "SELECT file_path, chunk_index, content, embedding, metadata FROM chunks"
+                    ).fetchall()]
+        except sqlite3.OperationalError:
+            return []
 
     def get_chunks_for_file(self, file_path: str) -> list[dict]:
-        return [dict(r) for r in
-                self.conn.execute(
-                    "SELECT * FROM chunks WHERE file_path=? ORDER BY chunk_index",
-                    (file_path,)
-                ).fetchall()]
+        """Fetch all chunks for a specific file, handling missing tables."""
+        try:
+            return [dict(r) for r in
+                    self.conn.execute(
+                        "SELECT * FROM chunks WHERE file_path=? ORDER BY chunk_index",
+                        (file_path,)
+                    ).fetchall()]
+        except sqlite3.OperationalError:
+            return []
 
     def keyword_search(self, query: str, top_k: int = 10) -> list[dict]:
-        pattern = f"%{query}%"
-        rows = self.conn.execute("""
-            SELECT DISTINCT c.file_path, c.content, f.file_type, f.summary,
-                   (LENGTH(c.content) - LENGTH(REPLACE(LOWER(c.content), LOWER(?), '')))
-                   / MAX(LENGTH(?),1) AS score
-            FROM chunks c
-            LEFT JOIN files f ON c.file_path = f.file_path
-            WHERE c.content LIKE ?
-            ORDER BY score DESC
-            LIMIT ?
-        """, (query, query, pattern, top_k)).fetchall()
-        return [
-            {
-                "file": dict(r)["file_path"], "file_path": dict(r)["file_path"],
-                "score": float(dict(r).get("score", 0)),
-                "preview": dict(r)["content"][:200], "content": dict(r)["content"],
-                "file_type": dict(r).get("file_type", "unknown"),
-            }
-            for r in rows
-        ]
+        """Case-insensitive keyword search, handling missing tables."""
+        try:
+            pattern = f"%{query}%"
+            rows = self.conn.execute("""
+                SELECT DISTINCT c.file_path, c.content, f.file_type, f.summary,
+                       (LENGTH(c.content) - LENGTH(REPLACE(LOWER(c.content), LOWER(?), '')))
+                       / MAX(LENGTH(?),1) AS score
+                FROM chunks c
+                LEFT JOIN files f ON c.file_path = f.file_path
+                WHERE c.content LIKE ?
+                ORDER BY score DESC
+                LIMIT ?
+            """, (query, query, pattern, top_k)).fetchall()
+            return [
+                {
+                    "file": dict(r)["file_path"], "file_path": dict(r)["file_path"],
+                    "score": float(dict(r).get("score", 0)),
+                    "preview": dict(r)["content"][:200], "content": dict(r)["content"],
+                    "file_type": dict(r).get("file_type", "unknown"),
+                }
+                for r in rows
+            ]
+        except sqlite3.OperationalError:
+            return []
 
     # ── Chat history ──────────────────────────────────────────────────────────
 

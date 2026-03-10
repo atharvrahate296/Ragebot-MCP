@@ -194,6 +194,7 @@ class RageBotEngine:
         doc_parser  = DocumentParser()
 
         indexed = skipped = total_tokens = 0
+        total_files = len(all_files)
 
         for file_path in all_files:
             rel   = str(file_path.relative_to(self.project_path))
@@ -217,13 +218,13 @@ class RageBotEngine:
                 chunks     = parsed.get("chunks", [content[:2000]])
                 max_chunks = self.config.get_int("max_chunks_per_file", 20)
 
-                for i, chunk in enumerate(chunks[:max_chunks]):
+                for j, chunk in enumerate(chunks[:max_chunks]):
                     if not chunk.strip():
                         continue
                     embedding = self.embedder.embed(chunk)
                     total_tokens += self._token_counter.count(chunk)
                     self.db.upsert_chunk(
-                        file_path=rel, chunk_index=i, content=chunk,
+                        file_path=rel, chunk_index=j, content=chunk,
                         embedding=embedding, file_hash=fhash,
                         metadata=json.dumps({
                             "type":      parsed.get("type", "unknown"),

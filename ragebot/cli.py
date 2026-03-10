@@ -18,14 +18,16 @@ from rich import print as rprint
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
-from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.prompt import Confirm, Prompt
+from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, MofNCompleteColumn
 from rich.syntax import Syntax
 from rich.table import Table
 
 from ragebot.core.config   import ConfigManager
 from ragebot.core.engine   import RageBotEngine
 from ragebot.utils.display import Display
+import questionary
+
 
 # ── App & globals ─────────────────────────────────────────────────────────────
 app = typer.Typer(
@@ -46,7 +48,12 @@ def _engine(path: str = ".") -> RageBotEngine:
 
 
 def _spin(msg: str) -> Progress:
-    return Progress(SpinnerColumn(), TextColumn(f"[cyan]{msg}"), console=console, transient=True)
+    return Progress(
+        SpinnerColumn(spinner_name="dots"),
+        TextColumn("[bold cyan]{task.description}"),
+        console=console,
+        transient=True
+    )
 
 
 _PROVIDER_META = {
@@ -56,19 +63,30 @@ _PROVIDER_META = {
 
 
 def _select_provider(prompt_msg: str = "Select a provider") -> str:
-    from rich.columns import Columns
-    items = []
-    for i, p in enumerate(PROVIDERS, 1):
-        meta = _PROVIDER_META.get(p, {"icon": "•", "color": "white", "label": p.title(), "desc": ""})
-        items.append(Panel(
-            f"[bold {meta['color']}]{meta['icon']}  {meta['label']}[/bold {meta['color']}]\n[dim]{meta['desc']}[/dim]",
-            border_style=meta["color"], title=f"[bold yellow]{i}[/bold yellow]", title_align="left", width=34, padding=(1, 2),
+    choices = []
+    for p in PROVIDERS:
+        meta = _PROVIDER_META.get(p, {"icon": "•", "color": "white", "label": p.title()})
+        choices.append(questionary.Choice(
+            title=[
+                ("class:icon", f"{meta['icon']} "),
+                ("class:label", meta["label"]),
+            ],
+            value=p
         ))
-    console.print(f"\n[bold cyan]{prompt_msg}:[/bold cyan]\n")
-    console.print(Columns(items, padding=(0, 2)))
-    console.print()
-    choice = Prompt.ask("[bold]Enter choice[/bold]", choices=[str(i) for i in range(1, len(PROVIDERS) + 1)])
-    selected = PROVIDERS[int(choice) - 1]
+    
+    selected = questionary.select(
+        prompt_msg,
+        choices=choices,
+        style=questionary.Style([
+            ("icon", f"fg:{_PROVIDER_META['gemini']['color']}"),
+            ("label", "bold"),
+            ("selected", "fg:cyan bold"),
+        ])
+    ).ask()
+    
+    if not selected:
+        return PROVIDERS[0]
+        
     meta = _PROVIDER_META.get(selected, {})
     console.print(f"  → [bold green]{meta.get('icon', '•')}  {meta.get('label', selected.title())}[/bold green]\n")
     return selected
@@ -92,12 +110,12 @@ def _get_model_category(model_id: str) -> tuple[str, str]:
 
 
 def _select_model(provider: str) -> str:
-    from rich.rule import Rule
     from ragebot.llm.models import PROVIDER_MODELS, PROVIDER_DEFAULTS
     models        = PROVIDER_MODELS.get(provider, [])
     default_model = PROVIDER_DEFAULTS.get(provider, "")
     if not models:
         return default_model
+
     console.print(Panel(f"[bold]Choose a model for [cyan]{provider.title()}[/cyan][/bold]", border_style="cyan", padding=(0, 2)))
     current_cat = ""
     for i, m in enumerate(models, 1):
@@ -112,8 +130,9 @@ def _select_model(provider: str) -> str:
     choice   = Prompt.ask(f"[bold]Select model [dim](1-{len(models)}, default=1)[/dim][/bold]", default="1")
     valid    = [str(i) for i in range(1, len(models) + 1)]
     selected = models[int(choice) - 1] if choice in valid else models[0]
+
     console.print(Panel(f"[bold green]✓  {selected['name']}[/bold green]\n[dim]{selected['id']}[/dim]", border_style="green", title="[bold]Selected Model[/bold]", title_align="left", padding=(0, 2)))
-    return selected["id"]
+    return selected_id
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -222,6 +241,7 @@ _REPL_COMMANDS: dict[str, str] = {
     "config":   "Manage settings",
     "version":  "Show version info",
     "help":     "Show this help",
+    "list":     "List available models",
     "exit":     "Exit the session",
 }
 
@@ -328,6 +348,9 @@ def _run_interactive_repl():
             messages.append({"role": "user",      "content": raw_input})
             messages.append({"role": "assistant",  "content": f"[Edited {file_path}]"})
             continue
+        elif cmd_name == "list":
+            cmd_list()
+            continue
 
         # ── Regular chat with history-aware retrieval ─────────────────────
         messages.append({"role": "user", "content": raw_input})
@@ -368,8 +391,10 @@ def cmd_init(
     """🚀 Initialise RageBot for a project directory."""
     try:
         eng = _engine(path)
-        with _spin("Initialising…"):
+        with _spin("Initialising RageBot…") as progress:
+            task = progress.add_task("Initialising…", total=None)
             result = eng.initialize(force=force)
+            progress.update(task, description=f"Initialised [bold]{result['file_count']}[/bold] files")
         display.success(f"Initialised at [bold]{result['path']}[/bold]")
         display.info("RageBot tables created securely.")
         display.info(f"[bold]{result['file_count']}[/bold] indexable files found.")
@@ -616,6 +641,31 @@ def cfg_show():
         t.add_row(k, str(v))
     console.print(t)
 
+
+
+@app.command("list")
+def cmd_list():
+    """📜 List available models for the current provider."""
+    try:
+        cfg = ConfigManager()
+        provider = cfg.get("llm_provider", "gemini")
+        from ragebot.llm.models import PROVIDER_MODELS
+        models = PROVIDER_MODELS.get(provider, [])
+        
+        table = Table(title=f"📜 Available Models for {provider.title()}", box=None, header_style="bold cyan")
+        table.add_column("Model Name", style="bold yellow")
+        table.add_column("ID", style="dim")
+        table.add_column("Description")
+        
+        current_model = cfg.get(f"{provider}_model", "")
+        
+        for m in models:
+            is_active = "[green]●[/green] " if m["id"] == current_model else "  "
+            table.add_row(f"{is_active}{m['name']}", m["id"], m["description"])
+        
+        console.print(table)
+    except Exception as e:
+        display.error(f"Error listing models: {e}")
 
 # ── AUTH ──────────────────────────────────────────────────────────────────────
 auth_app = typer.Typer(help="🔐 Manage API keys", invoke_without_command=True)
