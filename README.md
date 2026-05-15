@@ -59,7 +59,6 @@ ragebot-mcp/
 ├── deploy.md                       # Deployment guide (Claude Desktop, Docker, cloud…)
 ├── pyproject.toml                  # Modern Python packaging (PEP 517)
 ├── requirements.txt                # Core dependencies
-├── requirements-full.txt           # Full dependencies (all optional features)
 ├── setup.py                        # Backward-compatible setup entry
 └── README.md                       # This file
 ```
@@ -100,14 +99,7 @@ cd Ragebot-MCP
 python -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
 
-# Core + Gemini (recommended)
-pip install -e ".[gemini]"
-
-# Core + Grok
-pip install -e ".[grok]"
-
-# Everything (PDF, DOCX, FAISS, SSE server, file watching)
-pip install -e ".[full]"
+pip install -e .
 ```
 
 ### 2. Authenticate

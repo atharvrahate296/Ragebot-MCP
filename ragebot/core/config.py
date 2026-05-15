@@ -29,12 +29,8 @@ KEYRING_SERVICE = "ragebot-mcp"
 # Keys that must never appear in config.json
 _SECRET_KEYS: set[str] = {"gemini_api_key", "groq_api_key"}
 
-# Env-var → config-key mapping
+# Env-var → config-key mapping (Only MCP and non-secret overrides)
 _ENV_MAP: dict[str, str] = {
-    "GEMINI_API_KEY":                "gemini_api_key",
-    "GROQ_API_KEY":                  "groq_api_key",
-    "RAGEBOT_LLM_PROVIDER":          "llm_provider",
-    "RAGEBOT_EMBEDDING_MODEL":       "embedding_model",
     "RAGEBOT_MCP_TRANSPORT":         "mcp_transport",
     "RAGEBOT_MCP_HOST":              "mcp_host",
     "RAGEBOT_MCP_PORT":              "mcp_port",
@@ -45,10 +41,12 @@ _ENV_MAP: dict[str, str] = {
 # ── Non-secret defaults ───────────────────────────────────────────────────────
 DEFAULTS: dict[str, str] = {
     # LLM
-    "llm_provider":        "gemini",        # gemini | groq | none
+    "llm_provider":        "gemini",        # gemini | groq | ollama | none
     "gemini_model":        "gemini-2.0-flash",
     "groq_model":          "openai/gpt-oss-120b",
     "groq_base_url":       "https://api.groq.com/openai/v1",
+    "ollama_model":        "llama3",
+    "ollama_base_url":     "http://localhost:11434",
     # Embeddings
     "embedding_model":     "all-MiniLM-L6-v2",
     "embedding_batch_size":"32",
@@ -197,10 +195,6 @@ class ConfigManager:
 
     def get(self, key: str, default: Any = None) -> Any:
         if key in _SECRET_KEYS:
-            env_map_rev = {v: k for k, v in _ENV_MAP.items()}
-            env_val = os.environ.get(env_map_rev.get(key, ""), "")
-            if env_val:
-                return env_val
             kr_val = _keyring_get(key)
             if kr_val:
                 return kr_val

@@ -485,3 +485,26 @@ class TestMCPServer:
     def test_ping(self, server):
         resp = server.handle_request({"jsonrpc": "2.0", "id": 11, "method": "ping", "params": {}})
         assert resp["result"] == {}
+
+def main():
+    """Run the RageBot test suite."""
+    import pytest
+    import sys
+
+    print("Running RageBot MCP Test Suite...\n")
+
+    result = pytest.main([
+        __file__,
+        "-v"
+    ])
+
+    if result == 0:
+        print("\nAll tests passed successfully!")
+    else:
+        print("\nSome tests failed.")
+
+    return result
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

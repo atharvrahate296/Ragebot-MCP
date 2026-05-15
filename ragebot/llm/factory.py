@@ -29,6 +29,13 @@ def get_provider(config: "ConfigManager") -> "BaseLLMProvider":
             base_url=config.get("groq_base_url", "https://api.groq.com/openai/v1"),
         )
 
+    if provider_name == "ollama":
+        from ragebot.llm.ollama import OllamaProvider
+        return OllamaProvider(
+            model=config.get("ollama_model", "llama3"),
+            base_url=config.get("ollama_base_url", "http://localhost:11434"),
+        )
+
     # Fallback: no-op provider
     from ragebot.llm.noop import NoopProvider
     return NoopProvider()
