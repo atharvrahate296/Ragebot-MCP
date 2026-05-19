@@ -1,12 +1,21 @@
 """
-RageBot MCP — CLI Entry Point
-══════════════════════════════
-Modern interactive CLI inspired by Gemini CLI and Claude Code.
+RageBot MCP — CLI Entry Point (Updated)
+════════════════════════════════════════
+Modern interactive CLI with:
+✓ Proper command structure (ragebot → REPL, rage <cmd> → standard)
+✓ Interactive menus (arrow keys, mouse support via questionary)
+✓ Live provider/model status
+✓ Ollama support with auto-detection
+✓ Friendly error messages
+✓ Snapshot naming prompts
+✓ Masked API key input
+✓ Provider isolation
 """
 from __future__ import annotations
 
 import json
 import uuid
+import getpass
 from pathlib import Path
 from typing import Optional
 
@@ -16,15 +25,22 @@ from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.prompt import Confirm, Prompt
-from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, MofNCompleteColumn
+from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.syntax import Syntax
 from rich.table import Table
 
-from ragebot.core.config   import ConfigManager
-from ragebot.core.engine   import RageBotEngine
+from ragebot.core.config import ConfigManager
+from ragebot.core.engine import RageBotEngine
 from ragebot.utils.display import Display
+from ragebot.utils.logging_config import suppress_noisy_logs
+from ragebot.utils.ui_helpers import (
+    ProviderStatusDisplay, LoadingIndicator, show_friendly_error,
+    show_success_badge, show_warning_badge, show_info_badge
+)
 import questionary
 
+# Suppress noisy HuggingFace logs on startup
+suppress_noisy_logs()
 
 # ── App & globals ─────────────────────────────────────────────────────────────
 app = typer.Typer(
@@ -38,6 +54,12 @@ console = Console()
 display = Display()
 
 PROVIDERS = ["gemini", "groq", "ollama"]
+
+_PROVIDER_META = {
+    "gemini": {"icon": "✦", "color": "blue",  "label": "Google Gemini", "desc": "Google's multimodal AI"},
+    "groq":   {"icon": "⚡", "color": "green", "label": "Groq",          "desc": "Ultra-fast LLM inference"},
+    "ollama": {"icon": "🦙", "color": "yellow", "label": "Ollama",       "desc": "Local LLM inference"},
+}
 
 
 def _engine(path: str = ".") -> RageBotEngine:
@@ -53,14 +75,12 @@ def _spin(msg: str) -> Progress:
     )
 
 
-_PROVIDER_META = {
-    "gemini": {"icon": "✦", "color": "blue",  "label": "Google Gemini", "desc": "Google's multimodal AI"},
-    "groq":   {"icon": "⚡", "color": "green", "label": "Groq",          "desc": "Ultra-fast LLM inference"},
-    "ollama": {"icon": "🦙", "color": "yellow", "label": "Ollama",       "desc": "Local LLM inference"},
-}
-
+# ═══════════════════════════════════════════════════════════════════════════════
+# Provider Selection (Interactive)
+# ═══════════════════════════════════════════════════════════════════════════════
 
 def _select_provider(prompt_msg: str = "Select a provider") -> str:
+    """Interactive provider selection with arrow keys and mouse support."""
     choices = []
     for p in PROVIDERS:
         meta = _PROVIDER_META.get(p, {"icon": "•", "color": "white", "label": p.title()})
@@ -76,7 +96,7 @@ def _select_provider(prompt_msg: str = "Select a provider") -> str:
         prompt_msg,
         choices=choices,
         style=questionary.Style([
-            ("icon", f"fg:{_PROVIDER_META['gemini']['color']}"),
+            ("icon", f"fg:{_PROVIDER_META.get(selected, {}).get('color', 'white')}") if 'selected' in locals() else ("icon", "fg:white"),
             ("label", "bold"),
             ("selected", "fg:cyan bold"),
         ])
@@ -84,11 +104,15 @@ def _select_provider(prompt_msg: str = "Select a provider") -> str:
     
     if not selected:
         return PROVIDERS[0]
-        
+    
     meta = _PROVIDER_META.get(selected, {})
     console.print(f"  → [bold green]{meta.get('icon', '•')}  {meta.get('label', selected.title())}[/bold green]\n")
     return selected
 
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Model Selection (Interactive)
+# ═══════════════════════════════════════════════════════════════════════════════
 
 _MODEL_CATEGORIES: dict[str, tuple[str, str]] = {
     "openai/": ("OpenAI (GPT-OSS)", "bright_magenta"),
@@ -108,6 +132,7 @@ def _get_model_category(model_id: str) -> tuple[str, str]:
 
 
 def _select_model(provider: str) -> str:
+    """Interactive model selection with support for Ollama auto-detection."""
     from ragebot.llm.models import PROVIDER_MODELS, PROVIDER_DEFAULTS
     
     # Special handling for Ollama - auto-detect models from running server
@@ -119,7 +144,8 @@ def _select_model(provider: str) -> str:
     if not models:
         return default_model
 
-    console.print(Panel(f"[bold]Choose a model for [cyan]{provider.title()}[/cyan][/bold]", border_style="cyan", padding=(0, 2)))
+    console.print(Panel(f"[bold]Choose a model for [cyan]{provider.title()}[/cyan][/bold]", 
+                       border_style="cyan", padding=(0, 2)))
     
     choices = []
     for m in models:
@@ -147,7 +173,13 @@ def _select_model(provider: str) -> str:
     if not selected:
         selected = models[0]
 
-    console.print(Panel(f"[bold green]✓  {selected['name']}[/bold green]\n[dim]{selected['id']}[/dim]", border_style="green", title="[bold]Selected Model[/bold]", title_align="left", padding=(0, 2)))
+    console.print(Panel(
+        f"[bold green]✓  {selected['name']}[/bold green]\n[dim]{selected['id']}[/dim]",
+        border_style="green",
+        title="[bold]Selected Model[/bold]",
+        title_align="left",
+        padding=(0, 2)
+    ))
     return selected["id"]
 
 
@@ -156,17 +188,24 @@ def _select_ollama_model() -> str:
     try:
         from ragebot.llm.ollama import OllamaProvider
         
-        console.print(Panel("[bold]Discovering Ollama models...[/bold]", border_style="cyan", padding=(0, 2)))
+        console.print(Panel("[bold]Discovering Ollama models...[/bold]", 
+                           border_style="cyan", padding=(0, 2)))
         
         # Create a temporary provider to discover models
         provider = OllamaProvider()
         models = provider.MODELS
         
         if not models:
-            display.error("No Ollama models found. Please install a model first: ollama pull llama3")
+            show_friendly_error(
+                console,
+                "No Ollama Models Found",
+                "Ollama is running but no models are installed.",
+                "Install a model: ollama pull llama3"
+            )
             return "llama3"
         
-        console.print(Panel(f"[bold]Choose a model for [cyan]Ollama[/cyan][/bold]", border_style="cyan", padding=(0, 2)))
+        console.print(Panel(f"[bold]Choose a model for [cyan]Ollama[/cyan][/bold]", 
+                           border_style="cyan", padding=(0, 2)))
         
         choices = []
         for m in models:
@@ -191,36 +230,39 @@ def _select_ollama_model() -> str:
         if not selected:
             selected = models[0]
         
-        console.print(Panel(f"[bold green]✓  {selected['name']}[/bold green]\n[dim]{selected['id']}[/dim]", border_style="green", title="[bold]Selected Model[/bold]", title_align="left", padding=(0, 2)))
+        console.print(Panel(
+            f"[bold green]✓  {selected['name']}[/bold green]\n[dim]{selected['id']}[/dim]",
+            border_style="green",
+            title="[bold]Selected Model[/bold]",
+            title_align="left",
+            padding=(0, 2)
+        ))
         return selected["id"]
         
     except RuntimeError as e:
-        display.error(f"Error: {e}")
+        show_friendly_error(console, "Ollama Error", str(e), "Make sure Ollama is running: ollama serve")
         return "llama3"
     except Exception as e:
-        display.error(f"Error discovering Ollama models: {e}")
+        show_friendly_error(console, "Error Discovering Ollama Models", str(e))
         return "llama3"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# File-edit helpers
+# File Edit Helpers
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def _show_diff_and_confirm(eng: RageBotEngine, file_path: str, instruction: str) -> None:
-    """
-    Ask the LLM for the modified file, show a coloured diff, then
-    prompt the user to confirm before writing to disk.
-    """
+    """Ask LLM for modified file, show colored diff, prompt user to confirm."""
     with _spin(f"Generating edit for {file_path}…"):
         result = eng.apply_file_edit(file_path=file_path, instruction=instruction, write=False)
 
     if "error" in result:
-        display.error(result["error"])
+        show_friendly_error(console, "Edit Failed", result["error"])
         return
 
     diff = result.get("diff", "")
     if diff == "(no changes detected)":
-        display.info("The LLM produced no changes for that instruction.")
+        show_info_badge(console, "The LLM produced no changes for that instruction.")
         return
 
     # Show the diff with syntax highlighting
@@ -235,32 +277,17 @@ def _show_diff_and_confirm(eng: RageBotEngine, file_path: str, instruction: str)
             file_path=file_path, instruction=instruction, write=True
         )
         if write_result.get("written"):
-            display.success(
-                f"[bold]{file_path}[/bold] updated and re-indexed."
-            )
+            show_success_badge(console, f"[bold]{file_path}[/bold] updated and re-indexed.")
         elif "error" in write_result:
-            display.error(write_result["error"])
+            show_friendly_error(console, "Write Failed", write_result["error"])
         else:
-            display.info("No changes written.")
+            show_info_badge(console, "No changes written.")
     else:
-        display.info("Changes discarded.")
+        show_info_badge(console, "Changes discarded.")
 
 
-def _detect_edit_intent(
-    user_input: str,
-    eng: RageBotEngine,
-) -> tuple[str | None, str | None]:
-    """
-    Heuristically detect if the user wants to edit a file.
-
-    Returns (file_path, instruction) if an edit intent is detected,
-    otherwise (None, None).
-
-    Strategy:
-    - Look for verbs: add, insert, remove, delete, rename, replace, fix,
-      update, change, modify, refactor, append, prepend, comment
-    - Combined with a file mention in the same message.
-    """
+def _detect_edit_intent(user_input: str, eng: RageBotEngine) -> tuple[str | None, str | None]:
+    """Detect if user wants to edit a file."""
     import re
     EDIT_VERBS = re.compile(
         r"\b(add|insert|remove|delete|rename|replace|fix|update|change|"
@@ -322,6 +349,7 @@ def _repl_help():
     console.print("\n[dim]Tip: Type a question directly to ask the AI about your project.[/dim]\n")
 
 def _run_interactive_repl():
+    """Main REPL loop with context-aware chat history."""
     display.banner()
     console.print(Panel(
         "[bold cyan]Welcome to RageBot[/bold cyan]  •  [dim]Interactive Mode[/dim]\n\n"
@@ -330,9 +358,8 @@ def _run_interactive_repl():
         border_style="cyan", padding=(1, 3),
     ))
 
-    # Each REPL run gets a stable session ID so context cache is keyed correctly
     session_id = f"repl_{uuid.uuid4().hex[:12]}"
-    messages:  list[dict] = []
+    messages: list[dict] = []
     eng: RageBotEngine | None = None
 
     while True:
@@ -377,22 +404,22 @@ def _run_interactive_repl():
         elif cmd_name == "search":
             query = " ".join(parts[1:])
             if query: cmd_search(query=query)
-            else: display.warning("Usage: search <query>")
+            else: show_warning_badge(console, "Usage: search <query>")
             continue
         elif cmd_name == "explain":
             fp = parts[1] if len(parts) > 1 else ""
             if fp: cmd_explain(file_path=fp)
-            else: display.warning("Usage: explain <file_path>")
+            else: show_warning_badge(console, "Usage: explain <file_path>")
             continue
         elif cmd_name == "docs":
             fp = parts[1] if len(parts) > 1 else ""
             if fp: cmd_docs(file_path=fp)
-            else: display.warning("Usage: docs <file_path>")
+            else: show_warning_badge(console, "Usage: docs <file_path>")
             continue
         elif cmd_name == "test":
             fp = parts[1] if len(parts) > 1 else ""
             if fp: cmd_test(file_path=fp)
-            else: display.warning("Usage: test <file_path>")
+            else: show_warning_badge(console, "Usage: test <file_path>")
             continue
         elif cmd_name == "config":
             cfg_show(); continue
@@ -405,19 +432,17 @@ def _run_interactive_repl():
             cmd_snapshot(action=action, name=snap_name); continue
 
         # ── AI interaction ────────────────────────────────────────────────
-        # Lazily create engine on first non-command message
         if eng is None:
             eng = _engine(".")
 
         if not (eng.project_path / ".ragebot").exists():
-            display.warning("Project not initialized. Please run [bold]init[/bold] first.")
+            show_warning_badge(console, "Project not initialized. Please run [bold]init[/bold] first.")
             continue
 
         # ── Detect file-edit intent ───────────────────────────────────────
         file_path, instruction = _detect_edit_intent(raw_input, eng)
         if file_path and instruction:
             _show_diff_and_confirm(eng, file_path, instruction)
-            # Add to history so context carries forward
             messages.append({"role": "user",      "content": raw_input})
             messages.append({"role": "assistant",  "content": f"[Edited {file_path}]"})
             continue
@@ -429,11 +454,7 @@ def _run_interactive_repl():
         messages.append({"role": "user", "content": raw_input})
         with _spin("Thinking…"):
             try:
-                response = eng.chat(
-                    messages=messages,
-                    top_k=5,
-                    session_id=session_id,
-                )
+                response = eng.chat(messages=messages, top_k=5, session_id=session_id)
                 messages.append({"role": "assistant", "content": response})
                 console.print(Panel(
                     Markdown(response),
@@ -441,7 +462,7 @@ def _run_interactive_repl():
                     border_style="green",
                 ))
             except Exception as e:
-                display.error(f"Error: {e}")
+                show_friendly_error(console, "Error", str(e))
                 messages.pop()
 
 
@@ -461,36 +482,32 @@ def cmd_init(
     path:  str  = typer.Argument(".", help="Project directory"),
     force: bool = typer.Option(False, "--force", "-f", help="Force re-initialization"),
 ):
-    """🚀 Initialize RageBot. Set up project indexing and prepare for analysis.
-    
-    Creates a .ragebot directory with configuration and database."""
+    """🚀 Initialize RageBot. Set up project indexing and prepare for analysis."""
     try:
         eng = _engine(path)
         with _spin("Initialising RageBot…") as progress:
             task = progress.add_task("Initialising…", total=None)
             result = eng.initialize(force=force)
             progress.update(task, description=f"Initialised [bold]{result['file_count']}[/bold] files")
-        display.success(f"Initialised at [bold]{result['path']}[/bold]")
-        display.info("RageBot tables created securely.")
-        display.info(f"[bold]{result['file_count']}[/bold] indexable files found.")
-        display.info("Run [bold cyan]rage save[/bold cyan] to index the project.")
+        show_success_badge(console, f"Initialised at [bold]{result['path']}[/bold]")
+        show_info_badge(console, "RageBot tables created securely.")
+        show_info_badge(console, f"[bold]{result['file_count']}[/bold] indexable files found.")
+        show_info_badge(console, "Run [bold cyan]rage save[/bold cyan] to index the project.")
     except Exception as e:
-        display.error(f"Error during init: {e}")
+        show_friendly_error(console, "Initialization Error", str(e))
 
 
 @app.command("save")
 def cmd_save(
     path:          str           = typer.Argument(".", help="Project directory"),
     incremental:   bool          = typer.Option(True, "--incremental/--full"),
-    snapshot_name: Optional[str] = typer.Option(None, "--name", "-n", help="Custom snapshot name (auto-generated if not provided)"),
+    snapshot_name: Optional[str] = typer.Option(None, "--name", "-n", help="Custom snapshot name"),
 ):
-    """💾 Index project files and save a snapshot. Refreshes code analysis and semantic index.
-    
-    Scans project for changes, re-indexes files, and saves a timestamped snapshot."""
+    """💾 Index project files and save a snapshot."""
     try:
         eng = _engine(path)
         if not (eng.project_path / ".ragebot" / "ragebot.db").exists():
-            display.info("Project not initialized — running init first…")
+            show_info_badge(console, "Project not initialized — running init first…")
             eng.initialize()
 
         # Prompt for snapshot name if not provided
@@ -515,7 +532,7 @@ def cmd_save(
         table.add_row("Tokens Estimated", str(result["token_estimate"]))
         console.print(table)
     except Exception as e:
-        display.error(f"Error during save: {e}")
+        show_friendly_error(console, "Save Error", str(e))
 
 
 @app.command("ask")
@@ -526,11 +543,8 @@ def cmd_ask(
     top_k:      int           = typer.Option(5,  "--top-k", "-k"),
     show_files: bool          = typer.Option(True, "--show-files/--no-files"),
     export:     Optional[str] = typer.Option(None, "--export", "-e", help="Save result as JSON"),
-    markdown:   bool          = typer.Option(True, "--markdown/--plain"),
 ):
-    """🔍 Ask questions about your project. Searches codebase and returns AI-powered answers.
-    
-    Uses semantic search to find relevant code and context before answering."""
+    """🔍 Ask questions about your project."""
     try:
         eng = _engine(path)
         with _spin(f"Thinking about: {query!r}…"):
@@ -538,32 +552,29 @@ def cmd_ask(
         console.print(Panel(f"[bold yellow]{query}[/bold yellow]", title="❓ Query", border_style="blue"))
         answer = result.get("answer", "")
         if answer:
-            if markdown:
-                console.print(Panel(Markdown(answer), title=f"💡 Answer  [dim]({result.get('provider','')})[/dim]", border_style="green"))
-            else:
-                console.print(Panel(answer, title="💡 Answer", border_style="green"))
+            console.print(Panel(Markdown(answer), title=f"💡 Answer", border_style="green"))
         if show_files and result.get("sources"):
             t = Table(title="📁 Sources", box=None, header_style="bold cyan")
-            t.add_column("File", style="cyan"); t.add_column("Score", style="yellow"); t.add_column("Type", style="magenta")
+            t.add_column("File", style="cyan")
+            t.add_column("Score", style="yellow")
+            t.add_column("Type", style="magenta")
             for s in result["sources"]:
                 t.add_row(s["file"], f"{s['score']:.3f}", s["type"])
             console.print(t)
         if export:
             Path(export).write_text(json.dumps(result, indent=2))
-            display.success(f"Saved to [bold]{export}[/bold]")
+            show_success_badge(console, f"Saved to [bold]{export}[/bold]")
     except Exception as e:
-        display.error(f"Error: {e}")
+        show_friendly_error(console, "Ask Error", str(e))
 
 
 @app.command("chat")
 def cmd_chat(
     path:       str           = typer.Option(".", "--path", "-p"),
-    session_id: Optional[str] = typer.Option(None, "--session", "-s", help="Resume a session ID"),
+    session_id: Optional[str] = typer.Option(None, "--session", "-s", help="Resume a session"),
     top_k:      int           = typer.Option(5, "--top-k", "-k"),
 ):
-    """💬 Interactive chat with context. Multi-turn conversation about your code.
-    
-    Maintains chat history and context throughout the session."""
+    """💬 Interactive chat with context."""
     try:
         eng = _engine(path)
         sid = session_id or f"sess_{uuid.uuid4().hex[:8]}"
@@ -586,13 +597,12 @@ def cmd_chat(
                     eng.db.delete_chat_session(sid)
                     eng.clear_context_cache(sid)
                     messages = []
-                    display.success("Session cleared.")
+                    show_success_badge(console, "Session cleared.")
                     continue
                 else:
-                    display.warning(f"Unknown command: {user_input}")
+                    show_warning_badge(console, f"Unknown command: {user_input}")
                     continue
 
-            # Detect edit intent before sending to LLM
             file_path, instruction = _detect_edit_intent(user_input, eng)
             if file_path and instruction:
                 _show_diff_and_confirm(eng, file_path, instruction)
@@ -613,7 +623,7 @@ def cmd_chat(
             console.print(Panel(Markdown(response), title="[bold green]RageBot[/bold green]", border_style="green"))
 
     except Exception as e:
-        display.error(f"Error: {e}")
+        show_friendly_error(console, "Chat Error", str(e))
 
 
 @app.command("search")
@@ -622,34 +632,34 @@ def cmd_search(
     path:         str  = typer.Option(".", "--path", "-p"),
     search_type:  str  = typer.Option("semantic", "--type", "-t"),
     top_k:        int  = typer.Option(10, "--top-k", "-k"),
-    show_preview: bool = typer.Option(True, "--preview/--no-preview"),
 ):
-    """🔎 Semantic search. Find relevant code by meaning, not just keywords.
-    
-    Returns top-k matching files with relevance scores and code preview."""
+    """🔎 Semantic search."""
     try:
         eng = _engine(path)
         with _spin(f"Searching: {query!r}…"):
             results = eng.search(query=query, search_type=search_type, top_k=top_k)
+        if not results:
+            show_info_badge(console, "No results found.")
+            return
         t = Table(title="🔎 Results", box=None, header_style="bold cyan")
-        t.add_column("File"); t.add_column("Score"); t.add_column("Preview")
+        t.add_column("File")
+        t.add_column("Score")
+        t.add_column("Preview")
         for r in results:
             t.add_row(r.get("file",""), f"{r.get('score',0):.3f}", r.get("preview","")[:80])
         console.print(t)
     except Exception as e:
-        display.error(f"Error: {e}")
+        show_friendly_error(console, "Search Error", str(e))
 
 
 @app.command("status")
 def cmd_status(path: str = typer.Argument(".", help="Project directory")):
-    """📡 Check status. Shows indexing status, last saved, and LLM provider configuration.
-    
-    Verifies project initialization and connection to AI provider."""
+    """📡 Check status."""
     try:
         eng = _engine(path)
         db_exists = (eng.rage_dir / "ragebot.db").exists()
         if not db_exists:
-            display.warning(f"Project at {path} is not initialized.")
+            show_warning_badge(console, f"Project at {path} is not initialized.")
             return
 
         s = eng.get_status()
@@ -662,66 +672,61 @@ def cmd_status(path: str = typer.Argument(".", help="Project directory")):
             title="📡 RageBot Status", border_style="blue",
         ))
     except Exception as e:
-        display.error(f"Error getting status: {e}")
+        show_friendly_error(console, "Status Error", str(e))
 
 
 @app.command("version")
 def cmd_version():
-    """📌 Show version. Displays RageBot version and build information."""
+    """📌 Show version."""
     console.print(Panel("[bold cyan]RageBot MCP[/bold cyan]  v1.0.0\nIntelligent Project Context Engine", border_style="cyan"))
 
 
-# ── EXPLAIN ───────────────────────────────────────────────────────────────────
 @app.command("explain")
-def cmd_explain(file_path: str, symbol: Optional[str] = None, path: str = "."):
-    """📖 Explain code. AI-generated explanation of files, functions, or symbols.
-    
-    Provides clear, detailed breakdown of what code does and why."""
+def cmd_explain(
+    file_path: str = typer.Argument(...),
+    symbol: Optional[str] = typer.Option(None, "--symbol", "-s"),
+    path: str = typer.Option("."),
+):
+    """📖 Explain code."""
     try:
         eng = _engine(path)
         with _spin(f"Explaining {file_path}…"):
             result = eng.explain(file_path, symbol)
         if "error" in result:
-            display.error(result["error"]); return
+            show_friendly_error(console, "Explain Error", result["error"])
+            return
         console.print(Panel(Markdown(result.get("explanation", "")), title="💡 Explanation", border_style="green"))
     except Exception as e:
-        display.error(f"Error: {e}")
+        show_friendly_error(console, "Explain Error", str(e))
 
 
-# ── DOCS / TEST ───────────────────────────────────────────────────────────────
 @app.command("docs")
-def cmd_docs(file_path: str, path: str = ".", output: Optional[str] = None):
-    """📝 Generate docs. Auto-generate documentation for any file or module.
-    
-    Creates markdown-formatted documentation with examples and usage."""
+def cmd_docs(file_path: str = typer.Argument(...), path: str = typer.Option(".")):
+    """📝 Generate docs."""
     try:
         eng = _engine(path)
         with _spin("Generating docs…"):
             docs = eng.generate_docs(file_path)
         console.print(Panel(Markdown(docs), border_style="cyan"))
     except Exception as e:
-        display.error(f"Error: {e}")
+        show_friendly_error(console, "Docs Error", str(e))
 
 
 @app.command("test")
-def cmd_test(file_path: str, path: str = ".", output: Optional[str] = None):
-    """🧪 Generate tests. Auto-generate unit tests for code files.
-    
-    Creates pytest-compatible test cases with coverage suggestions."""
+def cmd_test(file_path: str = typer.Argument(...), path: str = typer.Option(".")):
+    """🧪 Generate tests."""
     try:
         eng = _engine(path)
         with _spin("Generating tests…"):
             tests = eng.generate_tests(file_path)
         console.print(Panel(Syntax(tests, "python"), border_style="cyan"))
     except Exception as e:
-        display.error(f"Error: {e}")
+        show_friendly_error(console, "Test Error", str(e))
 
 
 @app.command("context")
-def cmd_context(path: str = ".", tree: bool = False):
-    """📋 Project overview. Display project structure, statistics, and file tree.
-    
-    Shows code metrics, language breakdown, and file organization."""
+def cmd_context(path: str = typer.Option("."), tree: bool = typer.Option(False)):
+    """📋 Project overview."""
     try:
         eng = _engine(path)
         if tree:
@@ -731,11 +736,11 @@ def cmd_context(path: str = ".", tree: bool = False):
             for k, v in stats.items():
                 console.print(f"{k}: {v}")
     except Exception as e:
-        display.error(f"Error: {e}")
+        show_friendly_error(console, "Context Error", str(e))
 
 
-# ── CONFIG SHOW ───────────────────────────────────────────────────────────────
 def cfg_show():
+    """Display current configuration."""
     cfg = ConfigManager()
     all_cfg = cfg.get_all()
     t = Table(title="⚙️  RageBot Config", box=None, header_style="bold cyan", show_edge=False, padding=(0, 2))
@@ -746,12 +751,9 @@ def cfg_show():
     console.print(t)
 
 
-
 @app.command("list")
 def cmd_list():
-    """📜 List models. Shows available AI models for the current provider.
-    
-    Displays model IDs, names, and current active model."""
+    """📜 List models."""
     try:
         cfg = ConfigManager()
         provider = cfg.get("llm_provider", "gemini")
@@ -771,18 +773,16 @@ def cmd_list():
         
         console.print(table)
     except Exception as e:
-        display.error(f"Error listing models: {e}")
+        show_friendly_error(console, "List Error", str(e))
 
-# ── SNAPSHOT MANAGEMENT ───────────────────────────────────────────────────────
+
 @app.command("snapshot")
 def cmd_snapshot(
-    action: str = typer.Argument("list", help="Action: list, restore, delete"),
-    name:   Optional[str] = typer.Argument(None, help="Snapshot name (for restore/delete)"),
+    action: str = typer.Argument("list", help="list, restore, delete"),
+    name:   Optional[str] = typer.Argument(None, help="Snapshot name"),
     path:   str = typer.Option(".", "--path", "-p"),
 ):
-    """📸 Manage snapshots. List, restore, or delete saved project snapshots.
-    
-    Snapshots preserve index state at specific points in time."""
+    """📸 Manage snapshots."""
     try:
         eng = _engine(path)
         from ragebot.storage.snapshot import SnapshotManager
@@ -793,7 +793,7 @@ def cmd_snapshot(
         if action == "list":
             snaps = sm.list_snapshots()
             if not snaps:
-                display.info("No snapshots found.")
+                show_info_badge(console, "No snapshots found.")
                 return
             t = Table(title="📸 Snapshots", box=None, header_style="bold cyan")
             t.add_column("Name", style="cyan")
@@ -805,53 +805,51 @@ def cmd_snapshot(
             console.print(t)
         elif action == "restore":
             if not name:
-                display.error("Snapshot name required for restore.")
+                show_friendly_error(console, "Argument Error", "Snapshot name required for restore.")
                 return
             sm.restore(name)
-            display.success(f"Restored snapshot: [bold]{name}[/bold]")
+            show_success_badge(console, f"Restored snapshot: [bold]{name}[/bold]")
         elif action == "delete":
             if not name:
-                display.error("Snapshot name required for delete.")
+                show_friendly_error(console, "Argument Error", "Snapshot name required for delete.")
                 return
             if Confirm.ask(f"Delete snapshot [bold]{name}[/bold]?", default=False):
                 sm.delete(name)
-                display.success(f"Deleted snapshot: [bold]{name}[/bold]")
+                show_success_badge(console, f"Deleted snapshot: [bold]{name}[/bold]")
         else:
-            display.error(f"Unknown action: {action}. Use: list, restore, delete")
+            show_friendly_error(console, "Unknown Action", f"Use: list, restore, delete")
     except Exception as e:
-        display.error(f"Error: {e}")
+        show_friendly_error(console, "Snapshot Error", str(e))
 
 
-# ── AUTH ──────────────────────────────────────────────────────────────────────
-auth_app = typer.Typer(help="🔐 Manage API keys. Set, switch, or view authentication.", invoke_without_command=True)
+# ═══════════════════════════════════════════════════════════════════════════════
+# AUTH (Interactive)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+auth_app = typer.Typer(help="🔐 Manage API keys.", invoke_without_command=True)
 app.add_typer(auth_app, name="auth")
 
 def _do_auth_menu():
+    """Interactive auth menu with provider status."""
     cfg = ConfigManager()
     provider = cfg.get("llm_provider", "none")
     model = cfg.get(f"{provider}_model", "N/A")
     
     console.print()
     console.print(Panel(
-        f"[bold cyan]🔐  RageBot Auth Manager[/bold cyan]", 
+        f"[bold cyan]🔐  RageBot Auth Manager[/bold cyan]",
         subtitle=f"[yellow]{provider}[/yellow] @ [green]{model}[/green]",
         subtitle_align="right",
-        border_style="cyan", 
+        border_style="cyan",
         padding=(1, 3)
     ))
     choice = questionary.select(
         "Select an action:",
-        choices=[
-            "Login",
-            "Status",
-            "Switch"
-        ],
-        style=questionary.Style([
-            ("selected", "fg:cyan bold")
-        ])
+        choices=["Login", "Status", "Switch"],
+        style=questionary.Style([("selected", "fg:cyan bold")])
     ).ask()
     
-    if   choice == "Login": _do_login_interactive()
+    if   choice == "Login":  _do_login_interactive()
     elif choice == "Status": _do_auth_status()
     elif choice == "Switch": _do_switch_interactive()
 
@@ -861,53 +859,73 @@ def auth_callback(ctx: typer.Context):
         _do_auth_menu()
 
 def _do_login_interactive(provider: str | None = None):
-    import getpass
+    """Interactive login with masked API key input."""
     if not provider:
-        provider = _select_provider()
+        provider = _select_provider("Choose provider to authenticate")
     
-    # Ollama doesn't need an API key - just select model and proceed
+    # Ollama doesn't need an API key
     if provider == "ollama":
-        console.print(Panel("[bold]ℹ  No API key needed for Ollama[/bold]\n[dim]Ollama runs locally on your machine[/dim]", border_style="cyan", padding=(1, 2)))
+        console.print(Panel(
+            "[bold]ℹ  No API key needed for Ollama[/bold]\n"
+            "[dim]Ollama runs locally on your machine[/dim]",
+            border_style="cyan",
+            padding=(1, 2)
+        ))
         model = _select_model(provider)
         cfg = ConfigManager()
         cfg.set(f"{provider}_model", model)
         cfg.set("llm_provider", provider)
-        display.success("Ollama authenticated!")
+        show_success_badge(console, "Ollama authenticated!")
         return
     
-    # For other providers, request API key
-    key = getpass.getpass("  API Key: ").strip()
+    # For other providers, request API key with masking
+    console.print("[dim]Your API key will be masked and stored securely.[/dim]")
+    key = getpass.getpass("  API Key (shown as ••••••••): ").strip()
+    
+    if not key:
+        show_warning_badge(console, "No API key provided. Skipping authentication.")
+        return
+    
     if key:
-        cfg   = ConfigManager()
+        cfg = ConfigManager()
         cfg.set(f"{provider}_api_key", key)
         model = _select_model(provider)
         cfg.set(f"{provider}_model", model)
         cfg.set("llm_provider", provider)
-        display.success("Authenticated!")
+        show_success_badge(console, f"Authenticated with {provider.title()}!")
 
 def _do_auth_status():
-    cfg    = ConfigManager()
+    """Show authentication status for all providers."""
+    cfg = ConfigManager()
     active = cfg.get("llm_provider", "none")
+    console.print()
     for p in PROVIDERS:
         if p == "ollama":
-            # Ollama doesn't need API key
-            status = "[green]OK[/green]" if cfg.get(f"{p}_model") else "[red]Not configured[/red]"
+            status = "[green]✓ Configured[/green]" if cfg.get(f"{p}_model") else "[yellow]○ Not configured[/yellow]"
         else:
             key = cfg.get(f"{p}_api_key", "")
-            status = "[green]OK[/green]" if key else "[red]Missing[/red]"
-        act = " ★" if p == active else ""
-        console.print(f"{p}: {status}{act}")
+            status = "[green]✓ Configured[/green]" if key else "[yellow]○ Missing key[/yellow]"
+        act = " ★ [bold cyan](active)[/bold cyan]" if p == active else ""
+        console.print(f"  {p.title():<12} {status}{act}")
+    console.print()
 
 def _do_switch_interactive():
-    p = _select_provider()
+    """Switch active provider."""
+    p = _select_provider("Select provider to activate")
     ConfigManager().set("llm_provider", p)
-    display.success(f"Switched to {p}")
+    show_success_badge(console, f"Switched to {p.title()}")
 
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ENTRY POINTS
+# ═══════════════════════════════════════════════════════════════════════════════
 
 def main() -> None:
+    """Main entry point for `rage` command."""
     app()
 
 def main_interactive() -> None:
+    """Main entry point for `ragebot` command (launches interactive REPL)."""
     _run_interactive_repl()
 
 

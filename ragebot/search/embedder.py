@@ -10,7 +10,8 @@ import hashlib
 from pathlib import Path
 from typing import List, Optional
 
-
+from ragebot.utils.logging_config import suppress_noisy_logs
+suppress_noisy_logs()
 class Embedder:
     def __init__(self, model_name: str = "all-MiniLM-L6-v2", cache_dir: Optional[Path] = None):
         self.model_name = model_name

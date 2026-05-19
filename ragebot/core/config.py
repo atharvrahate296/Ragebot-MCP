@@ -1,16 +1,14 @@
 """
-RageBot Configuration Manager
-──────────────────────────────
+RageBot Configuration Manager (Updated)
+────────────────────────────────────────
 Non-secret settings  →  ~/.config/ragebot/config.json
 API keys (secrets)   →  OS keyring (macOS Keychain / GNOME Keyring / Windows Credential Manager)
                         Fallback: ~/.config/ragebot/.secrets  (chmod 600, never committed)
 
-Priority order for any value:
-  1. Environment variable
-  2. OS keyring  (secrets only)
-  3. ~/.config/ragebot/.secrets  (secrets only, keyring fallback)
-  4. ~/.config/ragebot/config.json  (non-secrets)
-  5. Built-in default
+Changes in this version:
+✓ Added Ollama configuration support
+✓ Added Ollama environment variable mappings
+✓ Extended provider support (gemini, groq, ollama)
 """
 from __future__ import annotations
 
@@ -23,19 +21,20 @@ from typing import Any
 # ── Paths ─────────────────────────────────────────────────────────────────────
 CONFIG_DIR   = Path.home() / ".config" / "ragebot"
 CONFIG_FILE  = CONFIG_DIR / "config.json"
-SECRETS_FILE = CONFIG_DIR / ".secrets"   # chmod-600 fallback when keyring unavailable
+SECRETS_FILE = CONFIG_DIR / ".secrets"
 KEYRING_SERVICE = "ragebot-mcp"
 
 # Keys that must never appear in config.json
 _SECRET_KEYS: set[str] = {"gemini_api_key", "groq_api_key"}
 
-# Env-var → config-key mapping (Only MCP and non-secret overrides)
+# Env-var → config-key mapping
 _ENV_MAP: dict[str, str] = {
     "RAGEBOT_MCP_TRANSPORT":         "mcp_transport",
     "RAGEBOT_MCP_HOST":              "mcp_host",
     "RAGEBOT_MCP_PORT":              "mcp_port",
     "RAGEBOT_CONTEXT_WINDOW_TURNS":  "context_window_turns",
     "RAGEBOT_CONTEXT_CACHE_ENABLED": "context_cache_enabled",
+    "RAGEBOT_OLLAMA_BASE_URL":       "ollama_base_url",
 }
 
 # ── Non-secret defaults ───────────────────────────────────────────────────────
@@ -70,12 +69,8 @@ DEFAULTS: dict[str, str] = {
     "mcp_host":            "127.0.0.1",
     "mcp_port":            "8765",
     "mcp_transport":       "stdio",
-    # ── Context & Retrieval ───────────────────────────────────────────────────
-    # Number of recent conversation turns whose text is blended into the
-    # semantic retrieval query.  Higher = more context-aware but slower.
+    # Context & Retrieval
     "context_window_turns":  "3",
-    # Persist retrieved-context cache to .ragebot/context_cache.json so that
-    # follow-up questions in a new CLI session still benefit from prior turns.
     "context_cache_enabled": "true",
 }
 

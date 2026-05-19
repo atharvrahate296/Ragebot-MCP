@@ -1,5 +1,10 @@
 """
 LLM Factory — resolves the configured provider and returns a BaseLLMProvider.
+
+Updated with Ollama provider support:
+✓ Detects Ollama provider configuration
+✓ Routes to OllamaProvider
+✓ Maintains isolation between providers
 """
 from __future__ import annotations
 

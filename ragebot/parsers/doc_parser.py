@@ -13,6 +13,12 @@ from pathlib import Path
 from typing import Any
 
 
+import logging
+
+# Suppress noisy HuggingFace logs
+from ragebot.utils.logging_config import suppress_noisy_logs
+suppress_noisy_logs()
+
 # ── NLTK Summariser ───────────────────────────────────────────────────────────
 
 def _ensure_nltk_data() -> bool:
