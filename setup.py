@@ -4,13 +4,60 @@ setup.py for RageBot MCP
 This script configures the project for installation using setuptools,
 leveraging pyproject.toml for metadata and requirements.txt for dependencies.
 """
-import toml
 from setuptools import setup, find_packages
 import os
 
 # --- Read Metadata from pyproject.toml ---
-with open("pyproject.toml", "r", encoding="utf-8") as f:
-    pyproject_data = toml.load(f)
+try:
+    import tomllib  # Python 3.11+
+except ImportError:
+    try:
+        import tomli as tomllib  # Fallback for Python 3.10
+    except ImportError:
+        try:
+            import toml as tomllib  # Fallback for older versions
+        except ImportError:
+            # Final fallback: Use basic parsing
+            import sys
+            print("Warning: Could not import toml library. Using basic parsing.", file=sys.stderr)
+            tomllib = None
+
+# Parse pyproject.toml
+if tomllib and hasattr(tomllib, 'load'):
+    with open("pyproject.toml", "rb") as f:
+        pyproject_data = tomllib.load(f)
+else:
+    # Basic fallback parsing
+    with open("pyproject.toml", "r", encoding="utf-8") as f:
+        pyproject_data = {}
+        # This is a simplified parser - just extract what we need
+        content = f.read()
+        # Extract version line
+        import re
+        version_match = re.search(r'version\s*=\s*"([^"]+)"', content)
+        if version_match:
+            pyproject_data = {
+                "project": {
+                    "name": "ragebot-mcp",
+                    "version": version_match.group(1),
+                    "description": "Intelligent CLI-based Project Context Engine with MCP server support",
+                    "readme": "README.md",
+                    "requires-python": ">=3.10",
+                    "license": {"text": "MIT"},
+                    "authors": [{"name": "RageBot Team"}],
+                    "keywords": ["cli", "ai", "mcp", "gemini", "grok"],
+                    "scripts": {
+                        "ragebot": "ragebot.cli:main_interactive",
+                        "rage": "ragebot.cli:main",
+                        "ragebot-mcp-server": "ragebot.mcp.server:main",
+                    }
+                },
+                "tool": {
+                    "setuptools": {
+                        "packages": {"find": {"where": ["."], "include": ["ragebot*"]}}
+                    }
+                }
+            }
 
 project_metadata = pyproject_data.get("project", {})
 

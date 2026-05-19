@@ -185,9 +185,9 @@ rage status
 
 | Command | Description |
 |---|---|
-| `rage snapshots list` | List saved snapshots |
-| `rage snapshots restore <name>` | Restore a snapshot |
-| `rage snapshots delete <name>` | Delete a snapshot |
+| `rage snapshot list` | List saved snapshots |
+| `rage snapshot restore <name>` | Restore a snapshot |
+| `rage snapshot delete <name>` | Delete a snapshot |
 
 ### History Sub-commands
 

@@ -348,6 +348,8 @@ def _run_interactive_repl():
         input_stripped = raw_input
         if input_stripped.lower().startswith("ragebot "):
             input_stripped = input_stripped[8:].strip()
+        elif input_stripped.lower().startswith("rage "):
+            input_stripped = input_stripped[5:].strip()
 
         low   = input_stripped.lower()
         parts = input_stripped.split()
@@ -496,7 +498,7 @@ def cmd_save(
             import time
             default_name = f"snap_{int(time.time())}"
             snapshot_name = Prompt.ask(
-                "[bold]Snapshot name",
+                "[bold]Snapshot name[/bold] [dim](press Enter for auto-generated name)[/dim]",
                 default=default_name,
                 show_default=True
             ).strip() or default_name
