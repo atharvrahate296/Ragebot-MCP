@@ -86,8 +86,23 @@ class Embedder:
         self._tried_import = True
         _emb_log.info(f"Loading embedding model: {self.model_name}")
         try:
+            # Disable tqdm progress bars at call-time to suppress "Loading weights" output
+            try:
+                import tqdm as _tqdm_mod
+                _tqdm_mod.tqdm.__init__.__defaults__  # noqa: check accessible
+                _orig_tqdm = _tqdm_mod.tqdm
+                _tqdm_mod.tqdm = lambda *a, **kw: _orig_tqdm(*a, **{**kw, "disable": True})
+            except Exception:
+                pass
+            try:
+                from huggingface_hub.utils import disable_progress_bars as _dpb
+                _dpb()
+            except Exception:
+                pass
             from sentence_transformers import SentenceTransformer
-            self._model = SentenceTransformer(self.model_name)
+            from ragebot.utils.logging_config import suppress_stderr_noise
+            with suppress_stderr_noise():
+                self._model = SentenceTransformer(self.model_name)
             _emb_log.info("Embedding model loaded successfully")
             return self._model
         except (ImportError, Exception) as e:
