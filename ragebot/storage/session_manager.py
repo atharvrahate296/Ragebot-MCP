@@ -31,6 +31,13 @@ class SessionManager:
         sessions = self.db.list_chat_sessions()
         return sessions[:limit]
     
+    def get_session_by_number(self, number: int) -> Optional[str]:
+        """Get session_id by its display number (1-indexed)."""
+        sessions = self.list_sessions()
+        if 1 <= number <= len(sessions):
+            return sessions[number - 1]["session_id"]
+        return None
+    
     def preview_session(self, session_id: str, lines: int = 5) -> str:
         """Get a brief preview of a session (last N messages)."""
         history = self.db.get_chat_history(session_id, limit=lines)
@@ -39,7 +46,7 @@ class SessionManager:
         
         preview_parts = []
         for msg in history[-lines:]:
-            role = msg["role"].upper()
+            role = "Ragebot" if msg["role"] == "assistant" else msg["role"].upper()
             content = msg["content"][:80]
             preview_parts.append(f"{role}: {content}...")
         return "\n".join(preview_parts)
@@ -55,7 +62,7 @@ class SessionManager:
             return None
         
         table = Table(title="📋 Chat Sessions", box=None, header_style="bold cyan")
-        table.add_column("Index", style="yellow", width=6)
+        table.add_column("#", style="yellow", width=6)
         table.add_column("Session ID", style="cyan", width=24)
         table.add_column("Started", style="dim", width=16)
         table.add_column("Messages", style="green", width=10)
@@ -70,35 +77,41 @@ class SessionManager:
             table.add_row(str(i), sid, started, msg_count, preview)
         
         self.console.print(table)
+        self.console.print("\n[dim]Enter a session number to view, or press Enter to cancel.[/dim]")
         
         try:
-            choice = int(self.console.input("\n[bold cyan]Select session (number):[/bold cyan] ").strip())
-            if 1 <= choice <= len(sessions):
-                return sessions[choice - 1]["session_id"]
+            choice = self.console.input("\n[bold cyan]Select session (#):[/bold cyan] ").strip()
+            if not choice:
+                return None
+            num = int(choice)
+            if 1 <= num <= len(sessions):
+                return sessions[num - 1]["session_id"]
         except (ValueError, IndexError):
             pass
         
         return None
     
     def view_session_full(self, session_id: str) -> None:
-        """Display the complete conversation of a session."""
+        """Display the complete conversation of a session with Ragebot labels."""
         history = self.db.get_chat_history(session_id, limit=1000)
         if not history:
-            self.console.print(f"[yellow]Session {session_id} is empty.[/yellow]")
+            self.console.print(f"[yellow]Session {session_id} not found or is empty.[/yellow]")
             return
         
         self.console.print(Panel(f"[bold cyan]Session: {session_id}[/bold cyan]", 
                                 border_style="cyan", padding=(0, 2)))
         
-        for i, msg in enumerate(history, 1):
+        msg_num = 0
+        for msg in history:
             role = msg["role"]
             content = msg["content"]
+            msg_num += 1
             
             if role == "user":
-                panel_title = f"[bold yellow]User #{i}[/bold yellow]"
+                panel_title = f"[bold yellow]You #{msg_num}[/bold yellow]"
                 border = "yellow"
             else:
-                panel_title = f"[bold green]Assistant #{i}[/bold green]"
+                panel_title = f"[bold green]Ragebot #{msg_num}[/bold green]"
                 border = "green"
             
             self.console.print(Panel(
@@ -110,6 +123,29 @@ class SessionManager:
         
         self.console.print(f"\n[dim]Total messages: {len(history)}[/dim]")
     
+    def show_session_by_number(self, number: int) -> bool:
+        """Show a session by its display number. Returns True if found."""
+        session_id = self.get_session_by_number(number)
+        if session_id:
+            self.view_session_full(session_id)
+            return True
+        self.console.print(f"[red]Session #{number} not found.[/red]")
+        return False
+    
+    def delete_session_by_number(self, number: int) -> bool:
+        """Delete a session by its display number. Returns True if deleted."""
+        session_id = self.get_session_by_number(number)
+        if not session_id:
+            self.console.print(f"[red]Session #{number} not found.[/red]")
+            return False
+        
+        from rich.prompt import Confirm
+        if Confirm.ask(f"\n[bold red]Delete session #{number} ({session_id[:20]})?[/bold red]", default=False):
+            self.db.delete_chat_session(session_id)
+            self.console.print(f"[green]✓ Session #{number} deleted.[/green]")
+            return True
+        return False
+
     def delete_session_interactive(self) -> Optional[str]:
         """Interactively select and delete a session."""
         session_id = self.display_sessions_interactive()
@@ -123,6 +159,11 @@ class SessionManager:
         
         return None
     
+    def get_session_history(self, session_id: str) -> list[dict]:
+        """Get full message history for a session (for context continuation)."""
+        history = self.db.get_chat_history(session_id, limit=1000)
+        return [{"role": m["role"], "content": m["content"]} for m in history]
+
     def export_session(self, session_id: str, output_path: Path) -> bool:
         """Export a session to JSON file."""
         history = self.db.get_chat_history(session_id, limit=10000)

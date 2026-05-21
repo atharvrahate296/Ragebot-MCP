@@ -100,7 +100,7 @@ def _select_provider(prompt_msg: str = "Select a provider") -> str:
         prompt_msg,
         choices=choices,
         style=questionary.Style([
-            ("icon", f"fg:{_PROVIDER_META.get(selected, {}).get('color', 'white')}") if 'selected' in locals() else ("icon", "fg:white"),
+            ("icon", "fg:white"),
             ("label", "bold"),
             ("selected", "fg:cyan bold"),
         ])
@@ -456,13 +456,15 @@ def _run_interactive_repl():
 
         # ── Regular chat with history-aware retrieval ─────────────────────
         messages.append({"role": "user", "content": raw_input})
+        eng.db.save_chat_message(session_id, "user", raw_input)
         with _spin("Thinking…"):
             try:
                 response = eng.chat(messages=messages, top_k=5, session_id=session_id)
                 messages.append({"role": "assistant", "content": response})
+                eng.db.save_chat_message(session_id, "assistant", response)
                 console.print(Panel(
                     Markdown(response),
-                    title="[bold green]RageBot[/bold green]",
+                    title="[bold green]Ragebot[/bold green]",
                     border_style="green",
                 ))
             except Exception as e:
@@ -530,10 +532,12 @@ def cmd_save(
         table = Table(title="📊 Indexing Summary", box=None, show_header=True, header_style="bold cyan")
         table.add_column("Metric",  style="cyan",  min_width=20)
         table.add_column("Value",   style="green")
+        table.add_row("Snapshot Name",    result["snapshot_name"])
         table.add_row("Files Indexed",    str(result["indexed"]))
         table.add_row("Files Skipped",    str(result["skipped"]))
-        table.add_row("Snapshot Name",    result["snapshot_name"])
         table.add_row("Tokens Estimated", str(result["token_estimate"]))
+        import time as _time
+        table.add_row("Timestamp",        _time.strftime("%Y-%m-%d %H:%M:%S"))
         console.print(table)
     except Exception as e:
         show_friendly_error(console, "Save Error", str(e))
@@ -624,7 +628,7 @@ def cmd_chat(
 
             messages.append({"role": "assistant", "content": response})
             eng.db.save_chat_message(sid, "assistant", response)
-            console.print(Panel(Markdown(response), title="[bold green]RageBot[/bold green]", border_style="green"))
+            console.print(Panel(Markdown(response), title="[bold green]Ragebot[/bold green]", border_style="green"))
 
     except Exception as e:
         show_friendly_error(console, "Chat Error", str(e))
@@ -640,7 +644,6 @@ def cmd_search(
     """🔎 Semantic search."""
     try:
         from ragebot.utils.search_formatter import SearchResultFormatter
-        from ragebot.core.engine import RageBotEngine
 
         formatter = SearchResultFormatter(console)
         eng = _engine(path)
@@ -652,16 +655,6 @@ def cmd_search(
             return
 
         formatter.format_results(results, query=query)
-
-        # For detailed view of single result:
-        formatter.format_result_detailed(results[0], show_code_syntax=True)
-        t = Table(title="🔎 Results", box=None, header_style="bold cyan")
-        t.add_column("File")
-        t.add_column("Score")
-        t.add_column("Preview")
-        for r in results:
-            t.add_row(r.get("file",""), f"{r.get('score',0):.3f}", r.get("preview","")[:80])
-        console.print(t)
     except Exception as e:
         show_friendly_error(console, "Search Error", str(e))
 
@@ -704,14 +697,43 @@ def cmd_explain(
     """📖 Explain code."""
     try:
         eng = _engine(path)
-        with _spin(f"Explaining {file_path}…"):
-            result = eng.explain(file_path, symbol)
+        # Try to resolve file path against indexed files
+        resolved = _resolve_file_path(eng, file_path)
+        if not resolved:
+            show_friendly_error(
+                console, "File Not Found",
+                f"'{file_path}' is not indexed.",
+                "Run 'rage save' to index your project, then try again."
+            )
+            return
+        with _spin(f"Explaining {resolved}…"):
+            result = eng.explain(resolved, symbol)
         if "error" in result:
             show_friendly_error(console, "Explain Error", result["error"])
             return
         console.print(Panel(Markdown(result.get("explanation", "")), title="💡 Explanation", border_style="green"))
     except Exception as e:
         show_friendly_error(console, "Explain Error", str(e))
+
+def _resolve_file_path(eng: RageBotEngine, file_path: str) -> Optional[str]:
+    """Try to resolve a file path against the indexed files."""
+    # Direct match
+    if eng.db.get_file(file_path):
+        return file_path
+    # Normalize separators
+    normalized = file_path.replace("\\", "/")
+    all_files = eng.db.get_all_files()
+    for f in all_files:
+        fp = f["file_path"].replace("\\", "/")
+        if fp == normalized or fp.endswith("/" + normalized) or fp.endswith(normalized):
+            return f["file_path"]
+    # Basename match
+    import os
+    basename = os.path.basename(file_path)
+    for f in all_files:
+        if os.path.basename(f["file_path"]) == basename:
+            return f["file_path"]
+    return None
 
 
 @app.command("docs")
@@ -728,53 +750,235 @@ def cmd_docs(file_path: str = typer.Argument(...), path: str = typer.Option(".")
 from ragebot.storage.session_manager import SessionManager
 
 @app.command("history")
-def cmd_history(action: str = "list", session_id: Optional[str] = None):
-    engine = _engine(".")
-    session_mgr = SessionManager(engine.db)
-    
-    if action == "list":
-        session_mgr.display_sessions_interactive()
-    elif action == "view":
-        if session_id:
-            session_mgr.view_session_full(session_id)
-    elif action == "delete":
-        deleted = session_mgr.delete_session_interactive()
+def cmd_history():
+    """📜 List chat sessions. Select one to continue chatting."""
+    try:
+        engine = _engine(".")
+        session_mgr = SessionManager(engine.db)
+        selected_sid = session_mgr.display_sessions_interactive()
+        if selected_sid:
+            # Show history then continue chatting with preserved context
+            session_mgr.view_session_full(selected_sid)
+            console.print("\n[bold cyan]Continue chatting in this session? Type your message or /exit to quit.[/bold cyan]\n")
+            _continue_chat_session(engine, selected_sid)
+    except Exception as e:
+        show_friendly_error(console, "History Error", str(e))
+
+@app.command("show")
+def cmd_show(session_number: int = typer.Argument(..., help="Session number from 'rage history'")):
+    """👁️ Show full chat history for a session by number."""
+    try:
+        engine = _engine(".")
+        session_mgr = SessionManager(engine.db)
+        session_mgr.show_session_by_number(session_number)
+    except Exception as e:
+        show_friendly_error(console, "Show Error", str(e))
+
+@app.command("delete")
+def cmd_delete(session_number: int = typer.Argument(..., help="Session number from 'rage history'")):
+    """🗑️ Delete a chat session by number."""
+    try:
+        engine = _engine(".")
+        session_mgr = SessionManager(engine.db)
+        session_mgr.delete_session_by_number(session_number)
+    except Exception as e:
+        show_friendly_error(console, "Delete Error", str(e))
+
+def _continue_chat_session(eng: RageBotEngine, session_id: str):
+    """Continue an existing chat session with full context preservation."""
+    history = eng.db.get_chat_history(session_id, limit=100)
+    messages = [{"role": m["role"], "content": m["content"]} for m in history]
+
+    while True:
+        try:
+            user_input = Prompt.ask("[bold cyan]You[/bold cyan]").strip()
+        except (KeyboardInterrupt, EOFError):
+            console.print("\n[dim]Session saved. Goodbye! 👋[/dim]")
+            break
+        if not user_input:
+            continue
+        if user_input.lower() in ("/exit", "/quit", "exit", "quit"):
+            console.print("[dim]Session saved. Goodbye! 👋[/dim]")
+            break
+
+        file_path, instruction = _detect_edit_intent(user_input, eng)
+        if file_path and instruction:
+            _show_diff_and_confirm(eng, file_path, instruction)
+            messages.append({"role": "user", "content": user_input})
+            messages.append({"role": "assistant", "content": f"[Edited {file_path}]"})
+            eng.db.save_chat_message(session_id, "user", user_input)
+            eng.db.save_chat_message(session_id, "assistant", f"[Edited {file_path}]")
+            continue
+
+        messages.append({"role": "user", "content": user_input})
+        eng.db.save_chat_message(session_id, "user", user_input)
+
+        with _spin("Thinking…"):
+            try:
+                response = eng.chat(messages=messages, top_k=5, session_id=session_id)
+            except Exception as e:
+                show_friendly_error(console, "Chat Error", str(e))
+                messages.pop()
+                continue
+
+        messages.append({"role": "assistant", "content": response})
+        eng.db.save_chat_message(session_id, "assistant", response)
+        console.print(Panel(Markdown(response), title="[bold green]Ragebot[/bold green]", border_style="green"))
 
 from ragebot.utils.config_display import ConfigurationDisplay
 
 @app.command("config")
-def cmd_config(action: str = "show", path: str = "."):
-    config = ConfigManager()
-    display = ConfigurationDisplay(config)
-    
-    if action == "show":
-        engine = _engine(path)
-        display.display_runtime_config(engine)
-    elif action == "quick":
-        display.display_quick_config()
-    elif action == "env":
-        display.display_env_overrides()
+def cmd_config(
+    edit: bool = typer.Option(False, "--edit", "-e", help="Edit ignore patterns interactively"),
+    path: str = typer.Argument(".", help="Project directory"),
+):
+    """⚙️ Show or edit configuration."""
+    try:
+        config = ConfigManager()
+        if edit:
+            _edit_ignore_patterns(config)
+        else:
+            cd = ConfigurationDisplay(config)
+            engine = _engine(path)
+            cd.display_runtime_config(engine)
+    except Exception as e:
+        show_friendly_error(console, "Config Error", str(e))
+
+def _edit_ignore_patterns(config: ConfigManager):
+    """Interactive ignore pattern editor."""
+    current = config.get_ignore_patterns()
+    console.print(Panel(
+        "[bold cyan]Current Ignore Patterns[/bold cyan]",
+        border_style="cyan", padding=(0, 2)
+    ))
+    for i, p in enumerate(current, 1):
+        console.print(f"  [yellow]{i:>3}.[/yellow] {p}")
+
+    console.print("\n[dim]Options: [bold]add[/bold] <pattern>, [bold]remove[/bold] <number>, [bold]done[/bold][/dim]\n")
+    while True:
+        try:
+            action = Prompt.ask("[bold cyan]Edit[/bold cyan]").strip()
+        except (KeyboardInterrupt, EOFError):
+            break
+        if not action or action.lower() == "done":
+            break
+        if action.lower().startswith("add "):
+            pattern = action[4:].strip()
+            if pattern and pattern not in current:
+                current.append(pattern)
+                config.set("ignore_patterns", ",".join(current))
+                show_success_badge(console, f"Added: {pattern}")
+            elif pattern in current:
+                show_warning_badge(console, f"'{pattern}' already exists.")
+        elif action.lower().startswith("remove "):
+            try:
+                idx = int(action[7:].strip()) - 1
+                if 0 <= idx < len(current):
+                    removed = current.pop(idx)
+                    config.set("ignore_patterns", ",".join(current))
+                    show_success_badge(console, f"Removed: {removed}")
+                else:
+                    show_warning_badge(console, "Invalid number.")
+            except ValueError:
+                show_warning_badge(console, "Usage: remove <number>")
+        else:
+            show_warning_badge(console, "Usage: add <pattern> | remove <number> | done")
 
 from ragebot.llm.provider_manager import ProviderManager
 
 @app.command("model")
-def cmd_model(action: str = "list", model_id: Optional[str] = None):
-    config = ConfigManager()
-    provider_mgr = ProviderManager(config)
-    
-    if action == "list":
-        provider_mgr.display_all_providers()
-    elif action == "switch" and model_id:
-        if provider_mgr.switch_model(model_id):
-            show_success_badge(console, f"Switched to {model_id}")
-        else:
-            show_friendly_error(console, "Switch Failed", provider_mgr.get_last_error())
-    elif action == "test":
-        success, msg = provider_mgr.test_provider_connection()
-        if success:
-            show_success_badge(console, msg)
-        else:
-            show_friendly_error(console, "Connection Test Failed", msg)
+def cmd_model():
+    """🔄 Switch between available models for the current provider."""
+    try:
+        config = ConfigManager()
+        provider_mgr = ProviderManager(config)
+        provider = provider_mgr.get_current_provider()
+        
+        if provider == "none":
+            show_warning_badge(console, "No LLM provider configured. Run: rage auth")
+            return
+        
+        models = provider_mgr.list_available_models(provider)
+        if not models:
+            show_warning_badge(console, f"No models available for {provider}.")
+            return
+        
+        current_model = provider_mgr.get_current_model()
+        
+        choices = []
+        for m in models:
+            is_current = " ● (active)" if m["id"] == current_model else ""
+            desc = m.get("desc", m.get("description", ""))
+            choices.append(questionary.Choice(
+                title=[
+                    ("class:model", f"{m['name']}{is_current}"),
+                    ("class:dim", f"  - {m['id']}"),
+                    ("class:dim", f"  {desc}" if desc else ""),
+                ],
+                value=m["id"]
+            ))
+        
+        console.print(Panel(
+            f"[bold]Select a model for [cyan]{provider.title()}[/cyan][/bold]\n"
+            f"[dim]Current: {current_model}[/dim]",
+            border_style="cyan", padding=(0, 2)
+        ))
+        
+        selected = questionary.select(
+            "Choose model:",
+            choices=choices,
+            style=questionary.Style([
+                ("model", "bold"),
+                ("dim", "grey"),
+                ("selected", "fg:cyan bold"),
+            ])
+        ).ask()
+        
+        if selected and selected != current_model:
+            if provider_mgr.switch_model(selected):
+                show_success_badge(console, f"Switched to [bold]{selected}[/bold]")
+            else:
+                show_friendly_error(console, "Switch Failed", provider_mgr.get_last_error() or "Unknown error")
+        elif selected == current_model:
+            show_info_badge(console, f"Already using {selected}")
+    except Exception as e:
+        show_friendly_error(console, "Model Error", str(e))
+
+@app.command("providers")
+def cmd_providers():
+    """📋 Show all available providers and their status."""
+    try:
+        config = ConfigManager()
+        provider_mgr = ProviderManager(config)
+        
+        table = Table(title="📋 Available Providers", box=None, header_style="bold cyan")
+        table.add_column("Provider", style="cyan", width=17)
+        table.add_column("Label", style="white", width=30)
+        table.add_column("Status", style="green", width=20)
+        table.add_column("Default Model", style="dim", width=30)
+        
+        current = provider_mgr.get_current_provider()
+        
+        provider_info = {
+            "gemini": {"label": "Google Gemini", "default": "gemini-2.0-flash"},
+            "groq": {"label": "Groq (OpenAI-Compatible)", "default": "openai/gpt-oss-120b"},
+            "ollama": {"label": "Ollama (Local)", "default": "llama3"},
+        }
+        
+        for pid, info in provider_info.items():
+            if pid == "ollama":
+                model_set = config.get("ollama_model", "")
+                status = "✓ Configured" if model_set else "○ Not Configured"
+            else:
+                api_key = config.get(f"{pid}_api_key", "")
+                status = "✓ Configured" if api_key else "○ Not Configured"
+            
+            display_name = f"★ {pid}" if pid == current else f"  {pid}"
+            table.add_row(display_name, info["label"], status, info["default"])
+        
+        console.print(table)
+    except Exception as e:
+        show_friendly_error(console, "Providers Error", str(e))
 
 @app.command("test")
 def cmd_test(file_path: str = typer.Argument(...), path: str = typer.Option(".")):
@@ -811,7 +1015,7 @@ def cfg_show():
     t.add_column("Key",   style="cyan",  min_width=28)
     t.add_column("Value", style="white")
     for k, v in sorted(all_cfg.items()):
-        t.add_row(k, str(v))
+        t.add_row(k, v)
     console.print(t)
 
 
@@ -860,13 +1064,17 @@ def cmd_snapshot(
                 show_info_badge(console, "No snapshots found.")
                 return
             t = Table(title="📸 Snapshots", box=None, header_style="bold cyan")
+            t.add_column("", style="yellow", width=3)
             t.add_column("Name", style="cyan")
             t.add_column("Created", style="yellow")
             t.add_column("Files", style="green")
             t.add_column("Size", style="dim")
             for s in snaps:
-                t.add_row(s["name"], s["created"], str(s["files"]), s["size"])
+                marker = "★" if s.get("active") else " "
+                name_style = f"[bold cyan]{s['name']}[/bold cyan]" if s.get("active") else s["name"]
+                t.add_row(marker, name_style, s["created"], str(s["files"]), s["size"])
             console.print(t)
+            console.print("[dim]★ = currently active snapshot[/dim]")
         elif action == "restore":
             if not name:
                 show_friendly_error(console, "Argument Error", "Snapshot name required for restore.")
@@ -925,6 +1133,7 @@ def auth_callback(ctx: typer.Context):
 from ragebot.auth.provider_auth import ProviderAuthenticator
 
 def _do_login_interactive(provider: str | None = None):
+    """Login to a provider — delegates entirely to ProviderAuthenticator."""
     config = ConfigManager()
     provider_mgr = ProviderManager(config)
     authenticator = ProviderAuthenticator(config, provider_mgr)
@@ -938,37 +1147,6 @@ def _do_login_interactive(provider: str | None = None):
         show_success_badge(console, message)
     else:
         show_friendly_error(console, "Authentication Failed", message)
-    
-    # Ollama doesn't need an API key
-    if provider == "ollama":
-        console.print(Panel(
-            "[bold]ℹ  No API key needed for Ollama[/bold]\n"
-            "[dim]Ollama runs locally on your machine[/dim]",
-            border_style="cyan",
-            padding=(1, 2)
-        ))
-        model = _select_model(provider)
-        cfg = ConfigManager()
-        cfg.set(f"{provider}_model", model)
-        cfg.set("llm_provider", provider)
-        show_success_badge(console, "Ollama authenticated!")
-        return
-    
-    # For other providers, request API key with masking
-    console.print("[dim]Your API key will be masked and stored securely.[/dim]")
-    key = getpass.getpass("  API Key (shown as ••••••••): ").strip()
-    
-    if not key:
-        show_warning_badge(console, "No API key provided. Skipping authentication.")
-        return
-    
-    if key:
-        cfg = ConfigManager()
-        cfg.set(f"{provider}_api_key", key)
-        model = _select_model(provider)
-        cfg.set(f"{provider}_model", model)
-        cfg.set("llm_provider", provider)
-        show_success_badge(console, f"Authenticated with {provider.title()}!")
 
 def _do_auth_status():
     """Show authentication status for all providers."""

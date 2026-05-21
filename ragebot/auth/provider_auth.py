@@ -47,7 +47,7 @@ class ProviderAuthenticator:
         Returns the unmasked key.
         """
         self.console.print(f"\n[dim]Your API key will be masked and stored securely in OS keyring.[/dim]")
-        key = getpass.getpass(f"[bold]{prompt_text}:[/bold] ")
+        key = getpass.getpass(f"{prompt_text}: ")
         return key.strip()
     
     def _auth_gemini(self) -> tuple[bool, str]:

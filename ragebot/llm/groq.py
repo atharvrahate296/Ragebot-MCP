@@ -57,4 +57,28 @@ class GroqProvider(BaseLLMProvider):
             )
             return response.choices[0].message.content or ""
         except Exception as exc:
+            error_msg = str(exc)
+            if "rate_limit" in error_msg.lower() or "429" in error_msg:
+                return (
+                    "❌ Groq rate limit exceeded.\n"
+                    "Recovery steps:\n"
+                    "  1. Wait a few moments and try again\n"
+                    "  2. Switch to a different model: rage model\n"
+                    "  3. Switch provider: rage auth"
+                )
+            if "401" in error_msg or "auth" in error_msg.lower() or "invalid" in error_msg.lower():
+                return (
+                    "❌ Groq authentication failed.\n"
+                    "Recovery steps:\n"
+                    "  1. Check your API key: rage auth\n"
+                    "  2. Get a new key at: https://console.groq.com/keys"
+                )
+            if "connection" in error_msg.lower() or "network" in error_msg.lower():
+                return (
+                    "❌ Cannot reach Groq API.\n"
+                    "Recovery steps:\n"
+                    "  1. Check your internet connection\n"
+                    "  2. Try again in a moment\n"
+                    "  3. Switch provider: rage auth"
+                )
             return f"[Groq error: {exc}]"

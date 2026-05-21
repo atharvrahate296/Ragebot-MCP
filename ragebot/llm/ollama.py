@@ -90,9 +90,9 @@ class OllamaProvider(BaseLLMProvider):
             )
             self.model = available_model_names[0]
         
-        # Create OpenAI client pointing to Ollama endpoint
+        # Create OpenAI client pointing to Ollama's OpenAI-compatible endpoint
         try:
-            self.client = OpenAI(api_key="ollama", base_url=self.base_url)
+            self.client = OpenAI(api_key="ollama", base_url=f"{self.base_url}/v1")
         except Exception as e:
             raise RuntimeError(f"Failed to initialize Ollama client: {e}") from e
 
@@ -190,5 +190,23 @@ class OllamaProvider(BaseLLMProvider):
             )
             return response.choices[0].message.content or ""
         except Exception as e:
+            error_msg = str(e)
             logger.error(f"Ollama completion failed: {e}")
-            return ""
+            if "404" in error_msg:
+                return (
+                    f"[Ollama error] Model '{self.model}' not found or endpoint unreachable.\n"
+                    "Recovery steps:\n"
+                    "  1. Verify Ollama is running: ollama serve\n"
+                    f"  2. Check model is installed: ollama list\n"
+                    f"  3. Pull the model if needed: ollama pull {self.model}\n"
+                    "  4. Try switching provider: rage auth"
+                )
+            if "connection" in error_msg.lower() or "refused" in error_msg.lower():
+                return (
+                    "[Ollama error] Cannot connect to Ollama server.\n"
+                    "Recovery steps:\n"
+                    "  1. Start Ollama: ollama serve\n"
+                    "  2. Check it's running on the correct port (default: 11434)\n"
+                    "  3. Try switching provider: rage auth"
+                )
+            return f"[Ollama error: {e}]"

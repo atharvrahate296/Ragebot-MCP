@@ -26,6 +26,13 @@ def suppress_noisy_logs() -> None:
     - CUDA/device warnings
     - urllib3 connection pool logs
     """
+    import os
+    # Suppress HF hub warnings via environment variables
+    os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
+    os.environ["TOKENIZERS_PARALLELISM"] = "false"
+    os.environ["HF_HUB_DISABLE_IMPLICIT_TOKEN"] = "1"
+    os.environ["TRANSFORMERS_NO_ADVISORY_WARNINGS"] = "1"
+    
     # Store original levels in case we need to restore
     loggers_to_suppress = {
         "transformers": logging.ERROR,
@@ -39,10 +46,12 @@ def suppress_noisy_logs() -> None:
         "huggingface_hub.file_download": logging.ERROR,
         "huggingface_hub.repository": logging.ERROR,
         "huggingface_hub.utils._authentication": logging.ERROR,
+        "huggingface_hub.utils._token": logging.ERROR,
+        "huggingface_hub._commit_api": logging.ERROR,
         "torch": logging.ERROR,
         "torch.distributed": logging.ERROR,
         "pytorch_lightning": logging.ERROR,
-        "filelock": logging.WARNING,
+        "filelock": logging.ERROR,
         "urllib3.connectionpool": logging.WARNING,
         "urllib3.util.retry": logging.WARNING,
         "h11._connection": logging.WARNING,
@@ -64,6 +73,8 @@ def suppress_noisy_logs() -> None:
     warnings.filterwarnings("ignore", category=UserWarning, module=".*huggingface.*")
     warnings.filterwarnings("ignore", category=FutureWarning, module=".*huggingface.*")
     warnings.filterwarnings("ignore", category=DeprecationWarning, module=".*torch.*")
+    warnings.filterwarnings("ignore", message=".*token.*")
+    warnings.filterwarnings("ignore", message=".*Token.*")
     
     # Suppress specific common warnings
     warnings.filterwarnings("ignore", message=".*Avoid calling deprecated DeprecationWarning.*")
