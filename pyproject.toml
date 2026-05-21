@@ -11,7 +11,7 @@ readme = "README.md"
 requires-python = ">=3.10"
 
 # Modern license format
-license = { text = "MIT" }
+license = "MIT"
 
 authors = [
     { name = "Atharv Rahate", email = "atharvdrahate@gmail.com" },
@@ -29,7 +29,7 @@ classifiers = [
 keywords = [
     "cli",
     "ai",
-    "mcp"
+    "mcp",
     "developer-tools",
     "code-context",
     "llm",
