@@ -692,6 +692,7 @@ class RageBotEngine:
         )
 
 
+
 # ── Utility ───────────────────────────────────────────────────────────────────
 
 def _strip_fences(text: str) -> str:

@@ -39,6 +39,9 @@ from ragebot.utils.ui_helpers import (
 )
 import questionary
 
+
+
+
 # Suppress noisy HuggingFace logs on startup
 suppress_noisy_logs()
 
@@ -78,6 +81,7 @@ def _spin(msg: str) -> Progress:
 # ═══════════════════════════════════════════════════════════════════════════════
 # Provider Selection (Interactive)
 # ═══════════════════════════════════════════════════════════════════════════════
+
 
 def _select_provider(prompt_msg: str = "Select a provider") -> str:
     """Interactive provider selection with arrow keys and mouse support."""
@@ -635,12 +639,22 @@ def cmd_search(
 ):
     """🔎 Semantic search."""
     try:
+        from ragebot.utils.search_formatter import SearchResultFormatter
+        from ragebot.core.engine import RageBotEngine
+
+        formatter = SearchResultFormatter(console)
         eng = _engine(path)
         with _spin(f"Searching: {query!r}…"):
             results = eng.search(query=query, search_type=search_type, top_k=top_k)
+
         if not results:
             show_info_badge(console, "No results found.")
             return
+
+        formatter.format_results(results, query=query)
+
+        # For detailed view of single result:
+        formatter.format_result_detailed(results[0], show_code_syntax=True)
         t = Table(title="🔎 Results", box=None, header_style="bold cyan")
         t.add_column("File")
         t.add_column("Score")
@@ -711,6 +725,56 @@ def cmd_docs(file_path: str = typer.Argument(...), path: str = typer.Option(".")
     except Exception as e:
         show_friendly_error(console, "Docs Error", str(e))
 
+from ragebot.storage.session_manager import SessionManager
+
+@app.command("history")
+def cmd_history(action: str = "list", session_id: Optional[str] = None):
+    engine = _engine(".")
+    session_mgr = SessionManager(engine.db)
+    
+    if action == "list":
+        session_mgr.display_sessions_interactive()
+    elif action == "view":
+        if session_id:
+            session_mgr.view_session_full(session_id)
+    elif action == "delete":
+        deleted = session_mgr.delete_session_interactive()
+
+from ragebot.utils.config_display import ConfigurationDisplay
+
+@app.command("config")
+def cmd_config(action: str = "show", path: str = "."):
+    config = ConfigManager()
+    display = ConfigurationDisplay(config)
+    
+    if action == "show":
+        engine = _engine(path)
+        display.display_runtime_config(engine)
+    elif action == "quick":
+        display.display_quick_config()
+    elif action == "env":
+        display.display_env_overrides()
+
+from ragebot.llm.provider_manager import ProviderManager
+
+@app.command("model")
+def cmd_model(action: str = "list", model_id: Optional[str] = None):
+    config = ConfigManager()
+    provider_mgr = ProviderManager(config)
+    
+    if action == "list":
+        provider_mgr.display_all_providers()
+    elif action == "switch" and model_id:
+        if provider_mgr.switch_model(model_id):
+            show_success_badge(console, f"Switched to {model_id}")
+        else:
+            show_friendly_error(console, "Switch Failed", provider_mgr.get_last_error())
+    elif action == "test":
+        success, msg = provider_mgr.test_provider_connection()
+        if success:
+            show_success_badge(console, msg)
+        else:
+            show_friendly_error(console, "Connection Test Failed", msg)
 
 @app.command("test")
 def cmd_test(file_path: str = typer.Argument(...), path: str = typer.Option(".")):
@@ -857,11 +921,23 @@ def _do_auth_menu():
 def auth_callback(ctx: typer.Context):
     if ctx.invoked_subcommand is None:
         _do_auth_menu()
+        
+from ragebot.auth.provider_auth import ProviderAuthenticator
 
 def _do_login_interactive(provider: str | None = None):
-    """Interactive login with masked API key input."""
+    config = ConfigManager()
+    provider_mgr = ProviderManager(config)
+    authenticator = ProviderAuthenticator(config, provider_mgr)
+    
     if not provider:
-        provider = _select_provider("Choose provider to authenticate")
+        provider = _select_provider()
+    
+    success, message = authenticator.authenticate_provider(provider)
+    
+    if success:
+        show_success_badge(console, message)
+    else:
+        show_friendly_error(console, "Authentication Failed", message)
     
     # Ollama doesn't need an API key
     if provider == "ollama":
@@ -914,6 +990,8 @@ def _do_switch_interactive():
     p = _select_provider("Select provider to activate")
     ConfigManager().set("llm_provider", p)
     show_success_badge(console, f"Switched to {p.title()}")
+
+
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
