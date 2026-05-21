@@ -61,8 +61,8 @@ def do_init(path: str = ".", force: bool = False) -> None:
 def do_save(path: str = ".", incremental: bool = True,
             snapshot_name: Optional[str] = None) -> None:
     """Index project and save snapshot."""
-    from rich.progress import Progress, SpinnerColumn, TextColumn
-    from rich.prompt import Prompt
+    from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
+    from rich.prompt import Prompt, Confirm
     try:
         eng = _engine(path)
         if not (eng.project_path / ".ragebot" / "ragebot.db").exists():
@@ -76,10 +76,50 @@ def do_save(path: str = ".", incremental: bool = True,
                 default=default_name,
             ).strip() or default_name
 
-        with Progress(SpinnerColumn(), TextColumn("[bold cyan]{task.description}"),
-                      transient=True) as p:
-            p.add_task("Indexing project…", total=None)
+        # ── Check LLM availability; offer index-only fallback for Ollama ──
+        from ragebot.llm.factory import get_provider
+        _provider_ok = True
+        try:
+            _prov = get_provider(ConfigManager())
+            _provider_ok = _prov.is_available()
+        except Exception:
+            _provider_ok = False
+
+        if not _provider_ok:
+            _pname = ConfigManager().get("llm_provider", "none")
+            if _pname not in ("none", ""):
+                show_warning_badge(
+                    console,
+                    f"[bold yellow]{_pname.title()}[/bold yellow] provider is not reachable. "
+                    "Indexing will proceed without LLM features."
+                )
+
+        # ── Step 1: Scan ──────────────────────────────────────────────────
+        with Progress(
+            SpinnerColumn(spinner_name="dots"),
+            TextColumn("[bold cyan]{task.description}"),
+            transient=True,
+            console=console,
+        ) as p:
+            t1 = p.add_task("[1/2] Scanning files…", total=None)
+            from ragebot.core.scanner import DirectoryScanner
+            scanner = DirectoryScanner(eng.project_path, eng.config)
+            all_files = scanner.scan()
+            p.update(t1, description=f"[1/2] Scanning files… [dim]{len(all_files)} found[/dim]")
+
+        # ── Step 2: Embed & index ─────────────────────────────────────────
+        with Progress(
+            SpinnerColumn(spinner_name="dots"),
+            TextColumn("[bold cyan]{task.description}"),
+            BarColumn(bar_width=30),
+            TaskProgressColumn(),
+            transient=True,
+            console=console,
+        ) as p:
+            t2 = p.add_task(f"[2/2] Embedding {len(all_files)} files…", total=len(all_files))
+
             result = eng.save(incremental=incremental, snapshot_name=snapshot_name)
+            p.update(t2, completed=len(all_files))
 
         t = Table(title="📊 Indexing Summary", box=None, header_style="bold cyan")
         t.add_column("Metric", style="cyan", min_width=20)
@@ -246,23 +286,60 @@ def do_search(query: str, path: str = ".",
 # ── status ───────────────────────────────────────────────────────────────────
 
 def do_status(path: str = ".") -> None:
-    """Show index status."""
+    """Show index status with live provider ping indicators."""
+    from rich.live import Live
+    from rich.spinner import Spinner
     try:
         eng = _engine(path)
         if not (eng.rage_dir / "ragebot.db").exists():
             show_warning_badge(console, f"Project at {path} is not initialized.")
             return
         s = eng.get_status()
-        llm_status = (
-            "[bold green]✓ Ready[/bold green]"
-            if s.get("llm_ready")
-            else "[bold red]✗ Not configured[/bold red]"
+
+        # ── Live-ping the provider ────────────────────────────────────────
+        provider_name = s.get("llm_provider", "none")
+        llm_ok = False
+        ping_detail = ""
+        with Live(
+            Spinner("dots", text=f"[cyan]Pinging {provider_name}…[/cyan]"),
+            refresh_per_second=10,
+            transient=True,
+            console=console,
+        ):
+            try:
+                from ragebot.llm.factory import get_provider as _gp
+                _prov = _gp(ConfigManager())
+                llm_ok = _prov.is_available()
+                ping_detail = "reachable" if llm_ok else "not reachable"
+            except Exception as _pe:
+                llm_ok = False
+                ping_detail = str(_pe)[:60]
+
+        if llm_ok:
+            llm_status = f"[bold green]✓ Connected[/bold green]  [dim]{ping_detail}[/dim]"
+        else:
+            llm_status = (
+                f"[bold red]✗ Not reachable[/bold red]  [dim]{ping_detail}[/dim]\n"
+                f"  [yellow]💡 rage auth login {provider_name}[/yellow]"
+            )
+
+        # ── Modified-files indicator ──────────────────────────────────────
+        modified = s.get("modified_since", 0)
+        modified_str = (
+            f"[yellow]{modified} file(s) changed since last save[/yellow]"
+            if modified > 0
+            else "[green]Up to date[/green]"
         )
+
         console.print(Panel(
             f"[cyan]Project:[/cyan]          {s.get('project_path')}\n"
-            f"[cyan]Indexed Files:[/cyan]    {s.get('indexed_files')}\n"
-            f"[cyan]Last Saved:[/cyan]       {s.get('last_saved','Never')}\n"
-            f"[cyan]LLM Provider:[/cyan]     {s.get('llm_provider','N/A')}  {llm_status}",
+            f"[cyan]Indexed Files:[/cyan]    {s.get('indexed_files')}  [dim]({s.get('db_size', 'N/A')})[/dim]\n"
+            f"[cyan]Last Saved:[/cyan]       {s.get('last_saved', 'Never')}\n"
+            f"[cyan]Modified Since:[/cyan]   {modified_str}\n"
+            f"[cyan]Snapshots:[/cyan]        {s.get('snapshot_count', 0)}\n"
+            f"[cyan]Embedding Model:[/cyan]  {s.get('embedding_model', 'N/A')}\n"
+            f"[cyan]LLM Provider:[/cyan]     [bold]{provider_name}[/bold]\n"
+            f"[cyan]LLM Status:[/cyan]       {llm_status}",
             title="📡 RageBot Status", border_style="blue",
         ))
     except RageBotError as e:

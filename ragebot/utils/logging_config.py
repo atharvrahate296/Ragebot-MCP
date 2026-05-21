@@ -5,10 +5,62 @@ Enhanced with background task handling and progress state management.
 """
 from __future__ import annotations
 
+import contextlib
+import io
 import logging
+import os
 import warnings
 import sys
 from typing import Optional
+
+
+@contextlib.contextmanager
+def suppress_stderr_noise():
+    """
+    Context manager that silently drops stderr lines containing noisy
+    model-loading messages emitted by the safetensors C-extension and
+    sentence-transformers. Other stderr output (real errors) is preserved.
+    """
+    _NOISE_PATTERNS = (
+        "following layers were not sharded",
+        "The following layers",
+        "Loading weights",
+        "encoder.layer",
+        "embeddings.",
+        "pooler.",
+    )
+
+    class _FilteredWriter(io.RawIOBase):
+        def __init__(self, original):
+            self._original = original
+            self._buf = ""
+
+        def write(self, data):
+            if isinstance(data, bytes):
+                data = data.decode("utf-8", errors="replace")
+            self._buf += data
+            # Flush complete lines
+            while "\n" in self._buf:
+                line, self._buf = self._buf.split("\n", 1)
+                if not any(p in line for p in _NOISE_PATTERNS):
+                    self._original.write(line + "\n")
+            return len(data.encode() if isinstance(data, str) else data)
+
+        def flush(self):
+            if self._buf and not any(p in self._buf for p in _NOISE_PATTERNS):
+                self._original.write(self._buf)
+            self._buf = ""
+            self._original.flush()
+
+    original_stderr = sys.stderr
+    try:
+        sys.stderr = _FilteredWriter(original_stderr)
+        yield
+    finally:
+        # flush remaining buffer
+        if hasattr(sys.stderr, 'flush'):
+            sys.stderr.flush()
+        sys.stderr = original_stderr
 
 
 # Store original log levels for restoration
@@ -32,6 +84,21 @@ def suppress_noisy_logs() -> None:
     os.environ["TOKENIZERS_PARALLELISM"] = "false"
     os.environ["HF_HUB_DISABLE_IMPLICIT_TOKEN"] = "1"
     os.environ["TRANSFORMERS_NO_ADVISORY_WARNINGS"] = "1"
+    # Suppress unauthenticated HF Hub request warnings and progress bars
+    os.environ["HF_HUB_VERBOSITY"] = "error"
+    os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
+    os.environ["SENTENCE_TRANSFORMERS_HOME"] = os.environ.get("SENTENCE_TRANSFORMERS_HOME", "")
+    # Disable tqdm globally for HF libraries
+    try:
+        from tqdm import tqdm
+        tqdm.monitor_interval = 0
+    except ImportError:
+        pass
+    try:
+        from huggingface_hub.utils import disable_progress_bars
+        disable_progress_bars()
+    except Exception:
+        pass
     
     # Store original levels in case we need to restore
     loggers_to_suppress = {
@@ -39,15 +106,19 @@ def suppress_noisy_logs() -> None:
         "transformers.modeling_utils": logging.ERROR,
         "transformers.configuration_utils": logging.ERROR,
         "transformers.tokenization_utils": logging.ERROR,
+        "transformers.utils.hub": logging.ERROR,
         "sentence_transformers": logging.ERROR,
         "sentence_transformers.cross_encoders": logging.ERROR,
         "sentence_transformers.models": logging.ERROR,
+        "sentence_transformers.SentenceTransformer": logging.ERROR,
         "huggingface_hub": logging.ERROR,
         "huggingface_hub.file_download": logging.ERROR,
         "huggingface_hub.repository": logging.ERROR,
         "huggingface_hub.utils._authentication": logging.ERROR,
         "huggingface_hub.utils._token": logging.ERROR,
+        "huggingface_hub.utils._headers": logging.ERROR,
         "huggingface_hub._commit_api": logging.ERROR,
+        "safetensors": logging.ERROR,
         "torch": logging.ERROR,
         "torch.distributed": logging.ERROR,
         "pytorch_lightning": logging.ERROR,
@@ -75,10 +146,16 @@ def suppress_noisy_logs() -> None:
     warnings.filterwarnings("ignore", category=DeprecationWarning, module=".*torch.*")
     warnings.filterwarnings("ignore", message=".*token.*")
     warnings.filterwarnings("ignore", message=".*Token.*")
-    
+    warnings.filterwarnings("ignore", message=".*unauthenticated.*")
+    warnings.filterwarnings("ignore", message=".*HF_TOKEN.*")
+    warnings.filterwarnings("ignore", message=".*rate limit.*")
+    warnings.filterwarnings("ignore", message=".*not sharded.*")
+    warnings.filterwarnings("ignore", message=".*following layers.*")
+
     # Suppress specific common warnings
     warnings.filterwarnings("ignore", message=".*Avoid calling deprecated DeprecationWarning.*")
     warnings.filterwarnings("ignore", message=".*Some weights.*not initialized.*")
+    warnings.filterwarnings("ignore", message=".*Loading weights.*")
 
 
 def restore_original_logging() -> None:

@@ -209,12 +209,17 @@ def _select_ollama_model() -> str:
     """Auto-detect and select from available Ollama models."""
     try:
         from ragebot.llm.ollama import OllamaProvider
+        from rich.live import Live
+        from rich.spinner import Spinner
         
-        console.print(Panel("[bold]Discovering Ollama models...[/bold]", 
-                           border_style="cyan", padding=(0, 2)))
-        
-        # Create a temporary provider to discover models
-        provider = OllamaProvider()
+        # Use a spinner while discovering models instead of a static panel
+        provider = None
+        with Live(
+            Spinner("dots", text="[cyan]Discovering Ollama models…[/cyan]"),
+            refresh_per_second=12,
+            transient=True,
+        ):
+            provider = OllamaProvider()
         models = provider.MODELS
         
         if not models:
@@ -231,11 +236,14 @@ def _select_ollama_model() -> str:
         
         choices = []
         for m in models:
+            # Show description if available, otherwise show model size hint
+            desc = m.get("description", m.get("desc", ""))
+            desc_part = [("class:dim", f"  — {desc}")] if desc else []
             choices.append(questionary.Choice(
                 title=[
                     ("class:model", m["name"]),
-                    ("class:dim", f"  - {m['id']}"),
-                ],
+                    ("class:dim", f"  [{m['id']}]"),
+                ] + desc_part,
                 value=m
             ))
         
@@ -373,16 +381,59 @@ def _repl_help():
 def _run_interactive_repl():
     """Main REPL loop with context-aware chat history."""
     display.banner()
+
+    # ── Project hint if already initialised ─────────────────────────────
+    _project_hint = ""
+    try:
+        from ragebot.core.engine import RageBotEngine
+        _hint_eng = RageBotEngine(project_path=Path(".").resolve(), config=ConfigManager())
+        if (_hint_eng.rage_dir / "ragebot.db").exists():
+            _stats = _hint_eng.db.get_stats()
+            _pname = Path(".").resolve().name
+            _nfiles = _stats.get("total_files", 0)
+            _last = _stats.get("last_updated", "never")
+            _project_hint = (
+                f"\n[dim]Project: [bold cyan]{_pname}[/bold cyan]  "
+                f"• {_nfiles} files indexed  • last saved {_last}[/dim]"
+            )
+    except Exception:
+        pass
+
+    # ── Provider/model badge ─────────────────────────────────────────
+    _cfg = ConfigManager()
+    _active_provider = _cfg.get("llm_provider", "none")
+    _active_model    = _cfg.get(f"{_active_provider}_model", "")
+    _provider_badge  = (
+        f"[dim]Provider: [bold yellow]{_active_provider}[/bold yellow]"
+        + (f" / {_active_model}" if _active_model else "")
+        + "[/dim]"
+    )
+
     console.print(Panel(
         "[bold cyan]Welcome to RageBot[/bold cyan]  •  [dim]Interactive Mode[/dim]\n\n"
         "[dim]Type a question to ask about your project, or use a command.\n"
-        "Type [bold]help[/bold] for commands, [bold]exit[/bold] or [bold]Ctrl+C[/bold] to quit.[/dim]",
+        "Type [bold]help[/bold] for commands, [bold]exit[/bold] or [bold]Ctrl+C[/bold] to quit.[/dim]"
+        + _project_hint,
         border_style="cyan", padding=(1, 3),
+        subtitle=_provider_badge, subtitle_align="right",
     ))
 
     session_id = f"repl_{uuid.uuid4().hex[:12]}"
     messages: list[dict] = []
     eng: RageBotEngine | None = None
+
+    # ── Dynamic prompt prefix ────────────────────────────────────────
+    def _prompt_prefix() -> str:
+        cfg = ConfigManager()
+        prov = cfg.get("llm_provider", "none")
+        model = cfg.get(f"{prov}_model", "")
+        short_model = model.split("/")[-1] if "/" in model else model
+        # Shorten long model names
+        if len(short_model) > 18:
+            short_model = short_model[:15] + "…"
+        if prov and prov != "none":
+            return f"[{prov}/{short_model}] ❯ " if short_model else f"[{prov}] ❯ "
+        return "❯ "
 
     # Set up prompt_toolkit input with history, fallback to rich Prompt
     try:
@@ -399,11 +450,12 @@ def _run_interactive_repl():
         )
 
         def _get_input() -> str:
-            return pt_session.prompt("❯ ").strip()
+            return pt_session.prompt(_prompt_prefix()).strip()
 
     except ImportError:
         def _get_input() -> str:
-            return Prompt.ask("[bold cyan]❯[/bold cyan]").strip()
+            prefix = _prompt_prefix()
+            return Prompt.ask(f"[bold cyan]{prefix}[/bold cyan]").strip()
 
     while True:
         try:
@@ -1063,8 +1115,28 @@ def _do_login_interactive(provider: str | None = None):
     
     if success:
         show_success_badge(console, message)
+        # ── Post-auth mini status ──────────────────────────────────────
+        try:
+            _prov_inst = provider_mgr.get_provider_instance()
+            _model = config.get(f"{provider}_model", "default")
+            _ping_ok = _prov_inst.is_available()
+            _ping_icon = "[bold green]✓[/bold green]" if _ping_ok else "[bold red]✗[/bold red]"
+            _ping_label = "Connected" if _ping_ok else "Not reachable — check key"
+            console.print(Panel(
+                f"[bold]{provider.title()}[/bold] is now active\n\n"
+                f"  [cyan]Model:[/cyan]      {_model}\n"
+                f"  [cyan]Connection:[/cyan] {_ping_icon} {_ping_label}",
+                border_style="green",
+                title="[bold]Provider Status[/bold]",
+                title_align="left",
+                padding=(0, 2),
+                expand=False,
+            ))
+        except Exception:
+            pass  # status is best-effort
     else:
-        show_friendly_error(console, "Authentication Failed", message)
+        _quick_fix = f"rage auth login {provider}"
+        show_friendly_error(console, "Authentication Failed", message, f"Retry: {_quick_fix}")
 
 def _do_auth_status():
     """Show authentication status for all providers."""

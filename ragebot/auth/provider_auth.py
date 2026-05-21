@@ -204,17 +204,16 @@ class ProviderAuthenticator:
     
     def _auth_ollama(self) -> tuple[bool, str]:
         """Authenticate with local Ollama instance."""
-        self.console.print(Panel(
-            "[bold yellow]Ollama Local Setup[/bold yellow]\n\n"
-            "[dim]Ollama runs locally on your machine.\n"
-            "Make sure Ollama is running: [bold]ollama serve[/bold][/dim]",
-            border_style="yellow",
-            padding=(1, 2)
-        ))
-        
-        # Test connection to Ollama
-        self.console.print("\n[cyan]Testing connection to Ollama...[/cyan]")
-        success, msg = self.provider_mgr.test_provider_connection()
+        # Test connection to Ollama with a spinner (no verbose setup panel)
+        from rich.live import Live
+        from rich.spinner import Spinner
+        self.console.print()
+        with Live(
+            Spinner("dots", text="[cyan]Connecting to Ollama…[/cyan]"),
+            refresh_per_second=10,
+            transient=True,
+        ):
+            success, msg = self.provider_mgr.test_provider_connection()
         
         if not success:
             return False, (
