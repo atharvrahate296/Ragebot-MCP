@@ -97,31 +97,49 @@ class SessionManager:
         if not history:
             self.console.print(f"[yellow]Session {session_id} not found or is empty.[/yellow]")
             return
-        
-        self.console.print(Panel(f"[bold cyan]Session: {session_id}[/bold cyan]", 
-                                border_style="cyan", padding=(0, 2)))
-        
+
+        # Compute timestamp info for header
+        started_ts = history[0].get("timestamp") if history else None
+        started_str = ""
+        if started_ts:
+            try:
+                started_str = f"  •  Started {datetime.fromtimestamp(float(started_ts)).strftime('%Y-%m-%d %H:%M')}"
+            except Exception:
+                pass
+
+        self.console.print(Panel(
+            f"[bold cyan]Session: {session_id}[/bold cyan]{started_str}\n"
+            f"[dim]{len(history)} message(s) in this conversation[/dim]",
+            border_style="cyan", padding=(0, 2),
+            title="[bold]💬 Chat History[/bold]",
+            title_align="left",
+        ))
+
         msg_num = 0
         for msg in history:
             role = msg["role"]
             content = msg["content"]
             msg_num += 1
-            
+
             if role == "user":
-                panel_title = f"[bold yellow]You #{msg_num}[/bold yellow]"
+                panel_title = f"[bold yellow]You[/bold yellow]  [dim]#{msg_num}[/dim]"
                 border = "yellow"
+                body = content
             else:
-                panel_title = f"[bold green]Ragebot #{msg_num}[/bold green]"
+                panel_title = f"[bold green]Ragebot[/bold green]  [dim]#{msg_num}[/dim]"
                 border = "green"
-            
+                body = Markdown(content)
+
             self.console.print(Panel(
-                content[:500] + ("..." if len(content) > 500 else ""),
+                body,
                 title=panel_title,
                 border_style=border,
                 padding=(0, 2),
             ))
-        
-        self.console.print(f"\n[dim]Total messages: {len(history)}[/dim]")
+
+        self.console.print(
+            f"\n[dim]─── End of history ({len(history)} messages) ───[/dim]\n"
+        )
     
     def show_session_by_number(self, number: int) -> bool:
         """Show a session by its display number. Returns True if found."""

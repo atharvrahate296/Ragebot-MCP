@@ -757,9 +757,9 @@ def cmd_history():
         session_mgr = SessionManager(engine.db)
         selected_sid = session_mgr.display_sessions_interactive()
         if selected_sid:
-            # Show history then continue chatting with preserved context
+            # Show the full history for the selected session
             session_mgr.view_session_full(selected_sid)
-            console.print("\n[bold cyan]Continue chatting in this session? Type your message or /exit to quit.[/bold cyan]\n")
+            # Then drop straight into the continuation chatbox
             _continue_chat_session(engine, selected_sid)
     except Exception as e:
         show_friendly_error(console, "History Error", str(e))
@@ -789,19 +789,30 @@ def _continue_chat_session(eng: RageBotEngine, session_id: str):
     history = eng.db.get_chat_history(session_id, limit=100)
     messages = [{"role": m["role"], "content": m["content"]} for m in history]
 
+    console.print(Panel(
+        f"[bold cyan]Continuing session[/bold cyan]  [dim]{session_id}[/dim]\n"
+        f"[dim]{len(messages)} previous message(s) loaded — context is fully preserved.\n"
+        "Type your message below, or [bold]/exit[/bold] to quit.[/dim]",
+        border_style="cyan",
+        padding=(0, 2),
+    ))
+
     while True:
         try:
             user_input = Prompt.ask("[bold cyan]You[/bold cyan]").strip()
         except (KeyboardInterrupt, EOFError):
             console.print("\n[dim]Session saved. Goodbye! 👋[/dim]")
             break
+
         if not user_input:
             continue
+
         if user_input.lower() in ("/exit", "/quit", "exit", "quit"):
             console.print("[dim]Session saved. Goodbye! 👋[/dim]")
             break
 
         file_path, instruction = _detect_edit_intent(user_input, eng)
+
         if file_path and instruction:
             _show_diff_and_confirm(eng, file_path, instruction)
             messages.append({"role": "user", "content": user_input})
@@ -823,7 +834,14 @@ def _continue_chat_session(eng: RageBotEngine, session_id: str):
 
         messages.append({"role": "assistant", "content": response})
         eng.db.save_chat_message(session_id, "assistant", response)
-        console.print(Panel(Markdown(response), title="[bold green]Ragebot[/bold green]", border_style="green"))
+
+        console.print(
+            Panel(
+                Markdown(response),
+                title="[bold green]Ragebot[/bold green]",
+                border_style="green"
+            )
+        )
 
 from ragebot.utils.config_display import ConfigurationDisplay
 
