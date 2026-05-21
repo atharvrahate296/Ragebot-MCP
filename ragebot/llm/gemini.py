@@ -14,6 +14,8 @@ from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
 
 from ragebot.llm.base import BaseLLMProvider
+from ragebot.utils.error_handler import RageBotError, ErrorCategory, ErrorSeverity
+
 
 
 class GeminiProvider(BaseLLMProvider):
@@ -135,23 +137,28 @@ class GeminiProvider(BaseLLMProvider):
                 time.sleep(wait_time)
                 return None  # Signal to retry
             else:
-                return (
-                    "❌ Rate limit exceeded. Please try again later.\n"
-                    "Consider:\n"
-                    "  • Waiting a few minutes before retrying\n"
-                    "  • Using a different model\n"
-                    "  • Checking your API quota at https://aistudio.google.com/app/apikey"
+                raise RageBotError(
+                    "Gemini rate limit exceeded",
+                    category=ErrorCategory.RATE_LIMIT,
+                    severity=ErrorSeverity.WARNING,
+                    recovery_steps=[
+                        "Wait a few minutes and retry",
+                        "Upgrade quota at https://aistudio.google.com/app/apikey",
+                        "Switch to gemini-1.5-flash (higher rate limits)",
+                    ],
+                    context={"provider": "gemini", "model": self._model},
                 )
         
         # Authentication errors
         if error.code in (401, 403):
-            return (
-                f"❌ Authentication failed: {error_msg}\n"
-                "Please check:\n"
-                "  • Your API key is correct\n"
-                "  • The API key is enabled at https://aistudio.google.com/app/apikey\n"
-                "  • You have access to the Gemini API\n"
-                "Run:  rage auth  to update your credentials."
+            raise RageBotError(
+                "Gemini authentication failed",
+                category=ErrorCategory.AUTHENTICATION,
+                severity=ErrorSeverity.ERROR,
+                recovery_steps=[
+                    "Run: rage auth login gemini",
+                    "Verify key at https://aistudio.google.com/app/apikey",
+                ],
             )
         
         # Invalid request

@@ -32,6 +32,12 @@ from ragebot.storage.snapshot    import SnapshotManager
 from ragebot.agents.context_builder import ContextBuilder
 from ragebot.utils.tokens        import TokenCounter
 from ragebot.llm.factory         import get_provider
+from ragebot.utils.error_handler import (
+    ErrorHandler, ErrorCategory, ErrorSeverity, RageBotError
+)
+from ragebot.utils.logging_config import BackgroundTaskLogger, ProgressState
+
+_error_handler = ErrorHandler()
 
 
 _CODE_EXTS = {".py",".js",".ts",".jsx",".tsx",".java",".cpp",".c",".go",".rs",".rb",".php",".swift",".kt",".cs"}
@@ -194,11 +200,17 @@ class RageBotEngine:
         doc_parser  = DocumentParser()
 
         indexed = skipped = total_tokens = 0
-        total_files = len(all_files)
 
-        for file_path in all_files:
+        # Set up progress tracking
+        task_log = BackgroundTaskLogger("save")
+        progress  = ProgressState("indexing", total_items=len(all_files))
+
+        for i, file_path in enumerate(all_files):
             rel   = str(file_path.relative_to(self.project_path))
             fhash = self._hash_file(file_path)
+
+            progress.update(i + 1, f"processing {file_path.name}")
+            task_log.debug(f"Processing {rel}")
 
             if incremental and self.db.is_indexed(rel, fhash):
                 skipped += 1
@@ -243,8 +255,17 @@ class RageBotEngine:
                 )
                 indexed += 1
 
-            except Exception:
+            except Exception as exc:
                 skipped += 1
+                progress.add_error(f"{rel}: {exc}")
+                task_log.warning(f"Skipped {rel}: {exc}")
+
+        progress.complete()
+        summary = progress.get_summary()
+        task_log.info(
+            f"Save complete: {summary['processed']} processed, "
+            f"{summary['errors']} errors"
+        )
 
         snap_name = snapshot_name or f"snap_{int(time.time())}"
         self.snapshot_mgr.create(snap_name, {
@@ -686,10 +707,38 @@ class RageBotEngine:
             f"{history_hint}\n\n"
             f"Question: {query}"
         )
-        return provider.complete(
-            _SYSTEM_PROMPT, user_prompt,
-            max_tokens=self.config.get_int("max_answer_tokens", 1000),
-        )
+        try:
+            return provider.complete(
+                _SYSTEM_PROMPT, user_prompt,
+                max_tokens=self.config.get_int("max_answer_tokens", 1000),
+            )
+        except RageBotError:
+            raise  # Already a typed error — let it propagate
+        except Exception as exc:
+            msg = str(exc)
+            if "rate" in msg.lower() or "429" in msg:
+                raise RageBotError(
+                    "Rate limit reached",
+                    category=ErrorCategory.RATE_LIMIT,
+                    severity=ErrorSeverity.WARNING,
+                    recovery_steps=[
+                        "Wait 60 seconds and retry",
+                        "Switch to a different model: rage model",
+                        "Switch provider: rage auth",
+                    ],
+                    context={"provider": provider.name},
+                ) from exc
+            elif "auth" in msg.lower() or "401" in msg or "403" in msg:
+                raise RageBotError(
+                    "Authentication failed",
+                    category=ErrorCategory.AUTHENTICATION,
+                    severity=ErrorSeverity.ERROR,
+                    recovery_steps=[
+                        "Re-authenticate: rage auth login <provider>",
+                        "Check your API key is valid",
+                    ],
+                ) from exc
+            raise
 
 
 

@@ -25,56 +25,51 @@ class SearchResultFormatter:
         max_preview_length: int = 150,
     ) -> None:
         """
-        Display search results in a structured format.
-        
+        Display search results with richer result cards, score bars, and per-result panels.
+
         Args:
             results: List of search result dicts with file_path, score, content, etc.
             query: The original search query (for context)
             max_preview_length: Max chars in preview snippet
         """
         if not results:
-            self.console.print("[yellow]No results found.[/yellow]")
-            return
-        
-        # Header with query
-        if query:
-            self.console.print(Panel(
-                f"[bold cyan]Search Query:[/bold cyan] {query}",
-                border_style="cyan",
-                padding=(0, 2)
-            ))
-        
-        # Results table (overview)
-        table = Table(title=f"📋 {len(results)} Results Found", box=None, header_style="bold cyan")
-        table.add_column("#", style="yellow", width=4)
-        table.add_column("File", style="cyan", width=30)
-        table.add_column("Score", style="green", width=10)
-        table.add_column("Type", style="magenta", width=10)
-        table.add_column("Preview", style="white", width=40)
-        
-        for i, result in enumerate(results[:20], 1):  # Show first 20
-            file_path = result.get("file_path") or result.get("file", "unknown")
-            score = result.get("score", 0)
-            file_type = result.get("file_type", "unknown")
-            content = result.get("content", result.get("preview", ""))
-            
-            # Create preview (first line or first N chars)
-            preview = self._create_preview(content, max_preview_length)
-            
-            table.add_row(
-                str(i),
-                self._shorten_path(file_path, 28),
-                f"{score:.3f}" if isinstance(score, float) else str(score),
-                file_type[:10],
-                preview,
+            self.console.print(
+                Panel("[yellow]No results found.[/yellow]",
+                      border_style="yellow", expand=False)
             )
-        
-        self.console.print(table)
-        
-        # Optional: detailed view of top result
-        if results:
-            self.console.print()
-            self._display_detailed_result(results[0], title="[bold]Top Result Details[/bold]")
+            return
+
+        if query:
+            self.console.print(
+                Panel(f"[bold cyan]🔍 {query}[/bold cyan]  "
+                      f"[dim]→ {len(results)} result(s)[/dim]",
+                      border_style="cyan", padding=(0, 2), expand=False)
+            )
+
+        for i, r in enumerate(results[:20], 1):
+            file_path = r.get("file_path") or r.get("file", "?")
+            score     = r.get("score", 0)
+            ftype     = r.get("file_type", r.get("type", ""))
+            content   = r.get("content", r.get("preview", ""))
+
+            # Score bar (0–1 → 10 chars)
+            bar_len  = max(1, int(score * 10)) if isinstance(score, float) else 0
+            bar      = "█" * bar_len + "░" * (10 - bar_len)
+            score_str = f"[green]{bar}[/green] {score:.3f}" if isinstance(score, float) else str(score)
+
+            preview = self._create_preview(content, max_preview_length)
+
+            self.console.print(
+                Panel(
+                    f"[dim]{score_str}[/dim]\n{preview}",
+                    title=f"[bold cyan]{i}.[/bold cyan] [yellow]{file_path}[/yellow]  [dim]{ftype}[/dim]",
+                    border_style="blue",
+                    padding=(0, 2),
+                    expand=False,
+                )
+            )
+
+
     
     def format_result_detailed(
         self,

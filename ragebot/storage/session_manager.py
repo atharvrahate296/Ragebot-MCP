@@ -70,11 +70,20 @@ class SessionManager:
         
         for i, sess in enumerate(sessions, 1):
             sid = sess["session_id"][:20]
-            started = datetime.fromtimestamp(sess["started"]).strftime("%Y-%m-%d %H:%M")
+            # Relative timestamp based on last_msg
+            import time as _time
+            now = _time.time()
+            delta = now - sess.get("last_msg", sess.get("started", now))
+            if delta < 3600:
+                age = f"{int(delta/60)}m ago"
+            elif delta < 86400:
+                age = f"{int(delta/3600)}h ago"
+            else:
+                age = f"{int(delta/86400)}d ago"
             msg_count = str(sess["messages"])
             preview = self.preview_session(sess["session_id"], lines=1).replace("\n", " ")[:35]
-            
-            table.add_row(str(i), sid, started, msg_count, preview)
+
+            table.add_row(str(i), sid, age, msg_count, preview)
         
         self.console.print(table)
         self.console.print("\n[dim]Enter a session number to view, or press Enter to cancel.[/dim]")
