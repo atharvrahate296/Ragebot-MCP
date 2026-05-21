@@ -22,8 +22,11 @@ import requests
 from openai import OpenAI
 
 from ragebot.llm.base import BaseLLMProvider
+from ragebot.utils.logging_config import BackgroundTaskLogger
 
 logger = logging.getLogger(__name__)
+_ollama_log = BackgroundTaskLogger("ollama")
+
 
 
 class ModelInfo(TypedDict):
@@ -103,6 +106,7 @@ class OllamaProvider(BaseLLMProvider):
         Populates `MODELS` with the list of tags returned by the Ollama API's
         `/api/tags` endpoint. Raises an error if the server is not running.
         """
+        _ollama_log.info(f"Discovering models from {self.base_url}/api/tags")
         try:
             resp = requests.get(
                 f"{self.base_url}/api/tags",
@@ -110,15 +114,15 @@ class OllamaProvider(BaseLLMProvider):
             )
             resp.raise_for_status()
             tags = resp.json().get("models", [])
-            
+
             if not tags:
                 self.MODELS = []
-                logger.error(
-                    "Ollama Error: No models found on the server. "
+                _ollama_log.warning(
+                    "No models found on the Ollama server. "
                     "Install models using: ollama pull <model_name>"
                 )
                 return
-            
+
             self.MODELS = [
                 {
                     "id": tag["name"],
@@ -127,31 +131,28 @@ class OllamaProvider(BaseLLMProvider):
                 }
                 for tag in tags
             ]
-            logger.info(f"Discovered {len(self.MODELS)} Ollama models: {', '.join(m['id'] for m in self.MODELS)}")
-            
+            _ollama_log.info(f"Discovered {len(self.MODELS)} models")
+
         except requests.ConnectionError as e:
-            logger.error(
-                f"Ollama Error: Cannot connect to Ollama server at {self.base_url}\n"
-                f"Make sure Ollama is running: ollama serve"
-            )
+            _ollama_log.error(f"Cannot connect to Ollama at {self.base_url}")
             self.MODELS = []
             raise RuntimeError(
                 f"Ollama server not running at {self.base_url}. "
                 f"Start it with: ollama serve"
             ) from e
         except requests.Timeout as e:
-            logger.error(f"Ollama Error: Request timeout while connecting to {self.base_url}")
+            _ollama_log.error(f"Request timeout while connecting to {self.base_url}")
             self.MODELS = []
             raise RuntimeError(
                 f"Ollama server at {self.base_url} is not responding. "
                 f"Make sure it's running and accessible."
             ) from e
         except requests.RequestException as e:
-            logger.error(f"Ollama Error: Failed to fetch models: {e}")
+            _ollama_log.error(f"Failed to fetch models: {e}")
             self.MODELS = []
             raise RuntimeError(f"Failed to connect to Ollama: {e}") from e
         except (KeyError, ValueError) as e:
-            logger.error(f"Ollama Error: Invalid response format from API: {e}")
+            _ollama_log.error(f"Invalid response format from API: {e}")
             self.MODELS = []
             raise RuntimeError(f"Invalid response from Ollama API: {e}") from e
 

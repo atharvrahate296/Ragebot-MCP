@@ -60,18 +60,32 @@ class ProviderAuthenticator:
         ))
         
         api_key = self._mask_api_key_input("Gemini API Key")
-        
+
         if not api_key:
             return False, "No API key provided."
-        
+
         # Store the key
         self.config.set("gemini_api_key", api_key)
-        
-        # Test connection
-        self.console.print("\n[cyan]Testing connection to Gemini...[/cyan]")
-        success, msg = self.provider_mgr.test_provider_connection()
-        
+
+        # Test connection with Live spinner
+        from rich.live import Live
+        from rich.spinner import Spinner
+        self.console.print()
+        with Live(
+            Spinner("dots", text="[cyan]Testing gemini connection…[/cyan]"),
+            refresh_per_second=10,
+            transient=True,
+        ):
+            success, msg = self.provider_mgr.test_provider_connection()
+
         if success:
+            self.console.print(
+                Panel(
+                    "[bold green]✓  Connected to Gemini[/bold green]",
+                    border_style="green", padding=(0, 2), expand=False,
+                )
+            )
+
             # Let user select a model
             models = self.provider_mgr.list_available_models("gemini")
             if models:
@@ -100,8 +114,18 @@ class ProviderAuthenticator:
             self.config.set("llm_provider", "gemini")
             return True, "✓ Gemini authenticated successfully (using default model)"
         else:
+            self.console.print(
+                Panel(
+                    f"[bold red]✗  Connection failed[/bold red]\n"
+                    f"[dim]{msg}[/dim]\n\n"
+                    f"[yellow]💡 Check your key or network, then retry:[/yellow]\n"
+                    f"  rage auth login gemini",
+                    border_style="red", padding=(1, 2),
+                )
+            )
             self.config.delete_secret("gemini_api_key")
-            return False, f"✗ Connection test failed: {msg}\n[yellow]API key has been discarded.[/yellow]"
+            return False, "Connection test failed."
+
     
     def _auth_groq(self) -> tuple[bool, str]:
         """Authenticate with Groq (OpenAI-compatible API)."""
@@ -113,18 +137,32 @@ class ProviderAuthenticator:
         ))
         
         api_key = self._mask_api_key_input("Groq API Key")
-        
+
         if not api_key:
             return False, "No API key provided."
-        
+
         # Store the key
         self.config.set("groq_api_key", api_key)
-        
-        # Test connection
-        self.console.print("\n[cyan]Testing connection to Groq...[/cyan]")
-        success, msg = self.provider_mgr.test_provider_connection()
-        
+
+        # Test connection with Live spinner
+        from rich.live import Live
+        from rich.spinner import Spinner
+        self.console.print()
+        with Live(
+            Spinner("dots", text="[cyan]Testing groq connection…[/cyan]"),
+            refresh_per_second=10,
+            transient=True,
+        ):
+            success, msg = self.provider_mgr.test_provider_connection()
+
         if success:
+            self.console.print(
+                Panel(
+                    "[bold green]✓  Connected to Groq[/bold green]",
+                    border_style="green", padding=(0, 2), expand=False,
+                )
+            )
+
             # Select model
             models = self.provider_mgr.list_available_models("groq")
             if models:
@@ -152,8 +190,17 @@ class ProviderAuthenticator:
             self.config.set("llm_provider", "groq")
             return True, "✓ Groq authenticated successfully"
         else:
+            self.console.print(
+                Panel(
+                    f"[bold red]✗  Connection failed[/bold red]\n"
+                    f"[dim]{msg}[/dim]\n\n"
+                    f"[yellow]💡 Check your key or network, then retry:[/yellow]\n"
+                    f"  rage auth login groq",
+                    border_style="red", padding=(1, 2),
+                )
+            )
             self.config.delete_secret("groq_api_key")
-            return False, f"✗ Connection test failed: {msg}\n[yellow]API key has been discarded.[/yellow]"
+            return False, "Connection test failed."
     
     def _auth_ollama(self) -> tuple[bool, str]:
         """Authenticate with local Ollama instance."""

@@ -10,8 +10,11 @@ import hashlib
 from pathlib import Path
 from typing import List, Optional
 
-from ragebot.utils.logging_config import suppress_noisy_logs
+from ragebot.utils.logging_config import suppress_noisy_logs, BackgroundTaskLogger
 suppress_noisy_logs()
+
+_emb_log = BackgroundTaskLogger("embedder")
+
 class Embedder:
     def __init__(self, model_name: str = "all-MiniLM-L6-v2", cache_dir: Optional[Path] = None):
         self.model_name = model_name
@@ -81,11 +84,14 @@ class Embedder:
         if self._tried_import:
             return self._model
         self._tried_import = True
+        _emb_log.info(f"Loading embedding model: {self.model_name}")
         try:
             from sentence_transformers import SentenceTransformer
             self._model = SentenceTransformer(self.model_name)
+            _emb_log.info("Embedding model loaded successfully")
             return self._model
-        except (ImportError, Exception):
+        except (ImportError, Exception) as e:
+            _emb_log.warning(f"Failed to load model, using fallback: {e}")
             self._model = None
             return None
 

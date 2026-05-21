@@ -9,6 +9,7 @@ API key is retrieved from the OS keyring (set via `rage auth`).
 from __future__ import annotations
 
 from ragebot.llm.base import BaseLLMProvider
+from ragebot.utils.error_handler import RageBotError, ErrorCategory, ErrorSeverity
 
 
 class GroqProvider(BaseLLMProvider):
@@ -57,28 +58,41 @@ class GroqProvider(BaseLLMProvider):
             )
             return response.choices[0].message.content or ""
         except Exception as exc:
-            error_msg = str(exc)
-            if "rate_limit" in error_msg.lower() or "429" in error_msg:
-                return (
-                    "❌ Groq rate limit exceeded.\n"
-                    "Recovery steps:\n"
-                    "  1. Wait a few moments and try again\n"
-                    "  2. Switch to a different model: rage model\n"
-                    "  3. Switch provider: rage auth"
-                )
-            if "401" in error_msg or "auth" in error_msg.lower() or "invalid" in error_msg.lower():
-                return (
-                    "❌ Groq authentication failed.\n"
-                    "Recovery steps:\n"
-                    "  1. Check your API key: rage auth\n"
-                    "  2. Get a new key at: https://console.groq.com/keys"
-                )
-            if "connection" in error_msg.lower() or "network" in error_msg.lower():
-                return (
-                    "❌ Cannot reach Groq API.\n"
-                    "Recovery steps:\n"
-                    "  1. Check your internet connection\n"
-                    "  2. Try again in a moment\n"
-                    "  3. Switch provider: rage auth"
-                )
-            return f"[Groq error: {exc}]"
+            msg = str(exc)
+            if "rate_limit" in msg.lower() or "429" in msg:
+                raise RageBotError(
+                    "Groq rate limit exceeded",
+                    category=ErrorCategory.RATE_LIMIT,
+                    severity=ErrorSeverity.WARNING,
+                    recovery_steps=[
+                        "Wait a moment and retry",
+                        "Switch to a smaller model: rage model",
+                    ],
+                    context={"provider": "groq", "model": self._model},
+                ) from exc
+            if "401" in msg or "auth" in msg.lower() or "invalid" in msg.lower():
+                raise RageBotError(
+                    "Groq authentication failed",
+                    category=ErrorCategory.AUTHENTICATION,
+                    severity=ErrorSeverity.ERROR,
+                    recovery_steps=[
+                        "Run: rage auth login groq",
+                        "Get a new key at: https://console.groq.com/keys",
+                    ],
+                ) from exc
+            if "connection" in msg.lower() or "network" in msg.lower():
+                raise RageBotError(
+                    f"Groq API error: {exc}",
+                    category=ErrorCategory.NETWORK,
+                    severity=ErrorSeverity.ERROR,
+                    recovery_steps=[
+                        "Check your internet connection",
+                        "Try again in a moment",
+                        "Switch provider: rage auth",
+                    ],
+                ) from exc
+            raise RageBotError(
+                f"Groq API error: {exc}",
+                category=ErrorCategory.PROVIDER_FAILURE,
+                severity=ErrorSeverity.ERROR,
+            ) from exc

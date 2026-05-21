@@ -213,3 +213,33 @@ def show_warning_badge(console: Console, message: str) -> None:
 def show_info_badge(console: Console, message: str) -> None:
     """Display an info message with badge."""
     console.print(f"[bold blue]ℹ[/bold blue] {message}")
+
+
+def show_bottom_error(console: Console, title: str, detail: str) -> None:
+    """
+    Print a compact error notification suitable for bottom-of-screen display.
+    Used for rate-limit hits, background re-index failures, etc.
+    """
+    console.print()
+    console.print(
+        Panel(
+            f"[bold red]{title}[/bold red]  [dim]{detail}[/dim]",
+            border_style="red",
+            padding=(0, 2),
+            expand=False,
+        ),
+        justify="right",
+    )
+
+
+def show_bottom_warning(console: Console, title: str, detail: str) -> None:
+    """Compact warning notification for bottom-of-screen display."""
+    console.print(
+        Panel(
+            f"[bold yellow]{title}[/bold yellow]  [dim]{detail}[/dim]",
+            border_style="yellow",
+            padding=(0, 2),
+            expand=False,
+        ),
+        justify="right",
+    )

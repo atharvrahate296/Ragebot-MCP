@@ -9,6 +9,8 @@ import time
 from pathlib import Path
 from typing import Any, Optional
 
+from ragebot.utils.error_handler import RageBotError, ErrorCategory, ErrorSeverity
+
 
 class SnapshotManager:
     def __init__(self, snapshots_dir: Path):
@@ -83,9 +85,15 @@ class SnapshotManager:
 
         snap_db = snap_dir / "ragebot.db"
         if not snap_db.exists():
-            raise FileNotFoundError(
-                f"Snapshot '{name}' exists but database file is missing.\n"
-                "The snapshot may be corrupted. Try creating a new one: rage save"
+            raise RageBotError(
+                f"Snapshot '{name}' database file is missing",
+                category=ErrorCategory.SNAPSHOT,
+                severity=ErrorSeverity.ERROR,
+                recovery_steps=[
+                    "List available snapshots: rage snapshot list",
+                    "Create a fresh snapshot: rage save",
+                ],
+                context={"snapshot_name": name},
             )
 
         dest = self.snapshots_dir.parent / "ragebot.db"

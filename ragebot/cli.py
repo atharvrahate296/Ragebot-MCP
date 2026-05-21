@@ -13,6 +13,20 @@ Modern interactive CLI with:
 """
 from __future__ import annotations
 
+import sys
+import os
+
+# Fix Windows cp1252 emoji encoding issues — must happen before any Rich output
+if sys.platform == "win32":
+    import io
+    os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+    if hasattr(sys.stdout, "reconfigure"):
+        try:
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+            sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
 import json
 import uuid
 import getpass
@@ -32,10 +46,14 @@ from rich.table import Table
 from ragebot.core.config import ConfigManager
 from ragebot.core.engine import RageBotEngine
 from ragebot.utils.display import Display
-from ragebot.utils.logging_config import suppress_noisy_logs
+from ragebot.utils.logging_config import suppress_noisy_logs, BackgroundTaskLogger, ProgressState
 from ragebot.utils.ui_helpers import (
     ProviderStatusDisplay, LoadingIndicator, show_friendly_error,
     show_success_badge, show_warning_badge, show_info_badge
+)
+from ragebot.core.commands import (
+    do_init, do_save, do_ask, do_explain, do_docs,
+    do_test, do_search, do_status, do_context, do_snapshot,
 )
 import questionary
 
@@ -366,9 +384,30 @@ def _run_interactive_repl():
     messages: list[dict] = []
     eng: RageBotEngine | None = None
 
+    # Set up prompt_toolkit input with history, fallback to rich Prompt
+    try:
+        from prompt_toolkit import PromptSession
+        from prompt_toolkit.history import InMemoryHistory
+        from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
+        from prompt_toolkit.styles import Style
+
+        pt_style  = Style.from_dict({"prompt": "bold ansicyan"})
+        pt_session = PromptSession(
+            history=InMemoryHistory(),
+            auto_suggest=AutoSuggestFromHistory(),
+            style=pt_style,
+        )
+
+        def _get_input() -> str:
+            return pt_session.prompt("❯ ").strip()
+
+    except ImportError:
+        def _get_input() -> str:
+            return Prompt.ask("[bold cyan]❯[/bold cyan]").strip()
+
     while True:
         try:
-            raw_input = Prompt.ask("\n[bold cyan]❯[/bold cyan]").strip()
+            raw_input = _get_input()
         except (KeyboardInterrupt, EOFError):
             console.print("\n[dim]Goodbye! 👋[/dim]")
             break
@@ -396,44 +435,44 @@ def _run_interactive_repl():
             cmd_version(); continue
         elif cmd_name == "status":
             p = parts[1] if len(parts) > 1 else "."
-            cmd_status(path=p); continue
+            do_status(path=p); continue
         elif cmd_name == "auth":
             _do_auth_menu(); continue
         elif cmd_name == "save":
             p = parts[1] if len(parts) > 1 else "."
-            cmd_save(path=p); continue
+            do_save(path=p); continue
         elif cmd_name == "init":
             p = parts[1] if len(parts) > 1 else "."
-            cmd_init(path=p); continue
+            do_init(path=p); continue
         elif cmd_name == "search":
             query = " ".join(parts[1:])
-            if query: cmd_search(query=query)
+            if query: do_search(query=query)
             else: show_warning_badge(console, "Usage: search <query>")
             continue
         elif cmd_name == "explain":
             fp = parts[1] if len(parts) > 1 else ""
-            if fp: cmd_explain(file_path=fp)
+            if fp: do_explain(file_path=fp)
             else: show_warning_badge(console, "Usage: explain <file_path>")
             continue
         elif cmd_name == "docs":
             fp = parts[1] if len(parts) > 1 else ""
-            if fp: cmd_docs(file_path=fp)
+            if fp: do_docs(file_path=fp)
             else: show_warning_badge(console, "Usage: docs <file_path>")
             continue
         elif cmd_name == "test":
             fp = parts[1] if len(parts) > 1 else ""
-            if fp: cmd_test(file_path=fp)
+            if fp: do_test(file_path=fp)
             else: show_warning_badge(console, "Usage: test <file_path>")
             continue
         elif cmd_name == "config":
             cfg_show(); continue
         elif cmd_name == "context":
             p = parts[1] if len(parts) > 1 else "."
-            cmd_context(path=p); continue
+            do_context(path=p); continue
         elif cmd_name == "snapshot":
             action = parts[1] if len(parts) > 1 else "list"
             snap_name = parts[2] if len(parts) > 2 else None
-            cmd_snapshot(action=action, name=snap_name); continue
+            do_snapshot(action=action, name=snap_name); continue
 
         # ── AI interaction ────────────────────────────────────────────────
         if eng is None:
@@ -457,19 +496,29 @@ def _run_interactive_repl():
         # ── Regular chat with history-aware retrieval ─────────────────────
         messages.append({"role": "user", "content": raw_input})
         eng.db.save_chat_message(session_id, "user", raw_input)
-        with _spin("Thinking…"):
-            try:
+
+        from rich.live import Live
+        from rich.spinner import Spinner
+        try:
+            with Live(
+                Spinner("dots", text="[bold cyan]Thinking…[/bold cyan]"),
+                refresh_per_second=12,
+                transient=True,
+            ):
                 response = eng.chat(messages=messages, top_k=5, session_id=session_id)
-                messages.append({"role": "assistant", "content": response})
-                eng.db.save_chat_message(session_id, "assistant", response)
-                console.print(Panel(
-                    Markdown(response),
-                    title="[bold green]Ragebot[/bold green]",
-                    border_style="green",
-                ))
-            except Exception as e:
-                show_friendly_error(console, "Error", str(e))
-                messages.pop()
+            messages.append({"role": "assistant", "content": response})
+            eng.db.save_chat_message(session_id, "assistant", response)
+            console.print(Panel(
+                Markdown(response),
+                title="[bold green]Ragebot[/bold green]",
+                border_style="green",
+                subtitle=f"[dim]{len(response.split())} words[/dim]",
+                subtitle_align="right",
+            ))
+        except Exception as e:
+            show_friendly_error(console, "Error", str(e))
+            messages.pop()
+
 
 
 @app.callback(invoke_without_command=True)
@@ -489,18 +538,7 @@ def cmd_init(
     force: bool = typer.Option(False, "--force", "-f", help="Force re-initialization"),
 ):
     """🚀 Initialize RageBot. Set up project indexing and prepare for analysis."""
-    try:
-        eng = _engine(path)
-        with _spin("Initialising RageBot…") as progress:
-            task = progress.add_task("Initialising…", total=None)
-            result = eng.initialize(force=force)
-            progress.update(task, description=f"Initialised [bold]{result['file_count']}[/bold] files")
-        show_success_badge(console, f"Initialised at [bold]{result['path']}[/bold]")
-        show_info_badge(console, "RageBot tables created securely.")
-        show_info_badge(console, f"[bold]{result['file_count']}[/bold] indexable files found.")
-        show_info_badge(console, "Run [bold cyan]rage save[/bold cyan] to index the project.")
-    except Exception as e:
-        show_friendly_error(console, "Initialization Error", str(e))
+    do_init(path=path, force=force)
 
 
 @app.command("save")
@@ -510,37 +548,7 @@ def cmd_save(
     snapshot_name: Optional[str] = typer.Option(None, "--name", "-n", help="Custom snapshot name"),
 ):
     """💾 Index project files and save a snapshot."""
-    try:
-        eng = _engine(path)
-        if not (eng.project_path / ".ragebot" / "ragebot.db").exists():
-            show_info_badge(console, "Project not initialized — running init first…")
-            eng.initialize()
-
-        # Prompt for snapshot name if not provided
-        if not snapshot_name:
-            import time
-            default_name = f"snap_{int(time.time())}"
-            snapshot_name = Prompt.ask(
-                "[bold]Snapshot name[/bold] [dim](press Enter for auto-generated name)[/dim]",
-                default=default_name,
-                show_default=True
-            ).strip() or default_name
-
-        with _spin("Indexing project…"):
-            result = eng.save(incremental=incremental, snapshot_name=snapshot_name)
-
-        table = Table(title="📊 Indexing Summary", box=None, show_header=True, header_style="bold cyan")
-        table.add_column("Metric",  style="cyan",  min_width=20)
-        table.add_column("Value",   style="green")
-        table.add_row("Snapshot Name",    result["snapshot_name"])
-        table.add_row("Files Indexed",    str(result["indexed"]))
-        table.add_row("Files Skipped",    str(result["skipped"]))
-        table.add_row("Tokens Estimated", str(result["token_estimate"]))
-        import time as _time
-        table.add_row("Timestamp",        _time.strftime("%Y-%m-%d %H:%M:%S"))
-        console.print(table)
-    except Exception as e:
-        show_friendly_error(console, "Save Error", str(e))
+    do_save(path=path, incremental=incremental, snapshot_name=snapshot_name)
 
 
 @app.command("ask")
@@ -553,27 +561,7 @@ def cmd_ask(
     export:     Optional[str] = typer.Option(None, "--export", "-e", help="Save result as JSON"),
 ):
     """🔍 Ask questions about your project."""
-    try:
-        eng = _engine(path)
-        with _spin(f"Thinking about: {query!r}…"):
-            result = eng.ask(query=query, mode=mode, top_k=top_k)
-        console.print(Panel(f"[bold yellow]{query}[/bold yellow]", title="❓ Query", border_style="blue"))
-        answer = result.get("answer", "")
-        if answer:
-            console.print(Panel(Markdown(answer), title=f"💡 Answer", border_style="green"))
-        if show_files and result.get("sources"):
-            t = Table(title="📁 Sources", box=None, header_style="bold cyan")
-            t.add_column("File", style="cyan")
-            t.add_column("Score", style="yellow")
-            t.add_column("Type", style="magenta")
-            for s in result["sources"]:
-                t.add_row(s["file"], f"{s['score']:.3f}", s["type"])
-            console.print(t)
-        if export:
-            Path(export).write_text(json.dumps(result, indent=2))
-            show_success_badge(console, f"Saved to [bold]{export}[/bold]")
-    except Exception as e:
-        show_friendly_error(console, "Ask Error", str(e))
+    do_ask(query=query, path=path, mode=mode, top_k=top_k, show_files=show_files, export=export)
 
 
 @app.command("chat")
@@ -642,44 +630,13 @@ def cmd_search(
     top_k:        int  = typer.Option(10, "--top-k", "-k"),
 ):
     """🔎 Semantic search."""
-    try:
-        from ragebot.utils.search_formatter import SearchResultFormatter
-
-        formatter = SearchResultFormatter(console)
-        eng = _engine(path)
-        with _spin(f"Searching: {query!r}…"):
-            results = eng.search(query=query, search_type=search_type, top_k=top_k)
-
-        if not results:
-            show_info_badge(console, "No results found.")
-            return
-
-        formatter.format_results(results, query=query)
-    except Exception as e:
-        show_friendly_error(console, "Search Error", str(e))
+    do_search(query=query, path=path, search_type=search_type, top_k=top_k)
 
 
 @app.command("status")
 def cmd_status(path: str = typer.Argument(".", help="Project directory")):
     """📡 Check status."""
-    try:
-        eng = _engine(path)
-        db_exists = (eng.rage_dir / "ragebot.db").exists()
-        if not db_exists:
-            show_warning_badge(console, f"Project at {path} is not initialized.")
-            return
-
-        s = eng.get_status()
-        llm_status = "[bold green]✓ Ready[/bold green]" if s.get("llm_ready") else "[bold red]✗ Not configured[/bold red]"
-        console.print(Panel(
-            f"[cyan]Project:[/cyan]          {s.get('project_path')}\n"
-            f"[cyan]Indexed Files:[/cyan]    {s.get('indexed_files')}\n"
-            f"[cyan]Last Saved:[/cyan]       {s.get('last_saved','Never')}\n"
-            f"[cyan]LLM Provider:[/cyan]     {s.get('llm_provider','N/A')}  {llm_status}",
-            title="📡 RageBot Status", border_style="blue",
-        ))
-    except Exception as e:
-        show_friendly_error(console, "Status Error", str(e))
+    do_status(path=path)
 
 
 @app.command("version")
@@ -695,25 +652,7 @@ def cmd_explain(
     path: str = typer.Option("."),
 ):
     """📖 Explain code."""
-    try:
-        eng = _engine(path)
-        # Try to resolve file path against indexed files
-        resolved = _resolve_file_path(eng, file_path)
-        if not resolved:
-            show_friendly_error(
-                console, "File Not Found",
-                f"'{file_path}' is not indexed.",
-                "Run 'rage save' to index your project, then try again."
-            )
-            return
-        with _spin(f"Explaining {resolved}…"):
-            result = eng.explain(resolved, symbol)
-        if "error" in result:
-            show_friendly_error(console, "Explain Error", result["error"])
-            return
-        console.print(Panel(Markdown(result.get("explanation", "")), title="💡 Explanation", border_style="green"))
-    except Exception as e:
-        show_friendly_error(console, "Explain Error", str(e))
+    do_explain(file_path=file_path, symbol=symbol, path=path)
 
 def _resolve_file_path(eng: RageBotEngine, file_path: str) -> Optional[str]:
     """Try to resolve a file path against the indexed files."""
@@ -737,15 +676,13 @@ def _resolve_file_path(eng: RageBotEngine, file_path: str) -> Optional[str]:
 
 
 @app.command("docs")
-def cmd_docs(file_path: str = typer.Argument(...), path: str = typer.Option(".")):
+def cmd_docs(
+    file_path: str = typer.Argument(...),
+    path: str = typer.Option("."),
+    output: Optional[str] = typer.Option(None, "--output", "-o"),
+):
     """📝 Generate docs."""
-    try:
-        eng = _engine(path)
-        with _spin("Generating docs…"):
-            docs = eng.generate_docs(file_path)
-        console.print(Panel(Markdown(docs), border_style="cyan"))
-    except Exception as e:
-        show_friendly_error(console, "Docs Error", str(e))
+    do_docs(file_path=file_path, path=path, output=output)
 
 from ragebot.storage.session_manager import SessionManager
 
@@ -999,30 +936,22 @@ def cmd_providers():
         show_friendly_error(console, "Providers Error", str(e))
 
 @app.command("test")
-def cmd_test(file_path: str = typer.Argument(...), path: str = typer.Option(".")):
+def cmd_test(
+    file_path: str = typer.Argument(...),
+    path: str = typer.Option("."),
+    output: Optional[str] = typer.Option(None, "--output", "-o"),
+):
     """🧪 Generate tests."""
-    try:
-        eng = _engine(path)
-        with _spin("Generating tests…"):
-            tests = eng.generate_tests(file_path)
-        console.print(Panel(Syntax(tests, "python"), border_style="cyan"))
-    except Exception as e:
-        show_friendly_error(console, "Test Error", str(e))
+    do_test(file_path=file_path, path=path, output=output)
 
 
 @app.command("context")
-def cmd_context(path: str = typer.Option("."), tree: bool = typer.Option(False)):
+def cmd_context(
+    path: str = typer.Option("."),
+    tree: bool = typer.Option(False),
+):
     """📋 Project overview."""
-    try:
-        eng = _engine(path)
-        if tree:
-            console.print(eng.get_file_tree()["tree"])
-        else:
-            stats = eng.get_project_overview()
-            for k, v in stats.items():
-                console.print(f"{k}: {v}")
-    except Exception as e:
-        show_friendly_error(console, "Context Error", str(e))
+    do_context(path=path, tree=tree)
 
 
 def cfg_show():
@@ -1069,47 +998,18 @@ def cmd_snapshot(
     path:   str = typer.Option(".", "--path", "-p"),
 ):
     """📸 Manage snapshots."""
-    try:
-        eng = _engine(path)
-        from ragebot.storage.snapshot import SnapshotManager
-        sm = SnapshotManager(eng.rage_dir / "snapshots")
-        
-        action = action.lower()
-        
-        if action == "list":
-            snaps = sm.list_snapshots()
-            if not snaps:
-                show_info_badge(console, "No snapshots found.")
-                return
-            t = Table(title="📸 Snapshots", box=None, header_style="bold cyan")
-            t.add_column("", style="yellow", width=3)
-            t.add_column("Name", style="cyan")
-            t.add_column("Created", style="yellow")
-            t.add_column("Files", style="green")
-            t.add_column("Size", style="dim")
-            for s in snaps:
-                marker = "★" if s.get("active") else " "
-                name_style = f"[bold cyan]{s['name']}[/bold cyan]" if s.get("active") else s["name"]
-                t.add_row(marker, name_style, s["created"], str(s["files"]), s["size"])
-            console.print(t)
-            console.print("[dim]★ = currently active snapshot[/dim]")
-        elif action == "restore":
-            if not name:
-                show_friendly_error(console, "Argument Error", "Snapshot name required for restore.")
-                return
-            sm.restore(name)
-            show_success_badge(console, f"Restored snapshot: [bold]{name}[/bold]")
-        elif action == "delete":
-            if not name:
-                show_friendly_error(console, "Argument Error", "Snapshot name required for delete.")
-                return
-            if Confirm.ask(f"Delete snapshot [bold]{name}[/bold]?", default=False):
-                sm.delete(name)
-                show_success_badge(console, f"Deleted snapshot: [bold]{name}[/bold]")
-        else:
-            show_friendly_error(console, "Unknown Action", f"Use: list, restore, delete")
-    except Exception as e:
-        show_friendly_error(console, "Snapshot Error", str(e))
+    do_snapshot(action=action, name=name, path=path)
+
+
+@app.command("debug")
+def cmd_debug(
+    enable: bool = typer.Option(True, "--on/--off", help="Toggle debug logging"),
+):
+    """🐛 Toggle debug logging."""
+    from ragebot.utils.logging_config import setup_debug_logging
+    setup_debug_logging(enable=enable)
+    state = "[green]enabled[/green]" if enable else "[yellow]disabled[/yellow]"
+    show_info_badge(console, f"Debug logging {state}")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
