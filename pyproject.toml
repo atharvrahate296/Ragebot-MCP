@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ragebot-mcp"
-version = "1.0.1"
+version = "1.0.2"
 
 description = "Intelligent CLI-based Project Context Engine with MCP server support"
 readme = "README.md"
@@ -14,32 +14,26 @@ requires-python = ">=3.10"
 license = { text = "MIT" }
 
 authors = [
-    { name = "Atharv Rahate", email = "atharvdrahate@gmail.com" }
+    { name = "Atharv Rahate", email = "atharvdrahate@gmail.com" },
+    { name = "Krushnansh Meher", email = "krushnansh22@gmail.com" },
+    { name = "Rohan Kokatare", email = "kokatarerohan@gmail.com" }
 ]
 
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
-    "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
-    "Topic :: Software Development :: Libraries",
-    "Topic :: Software Development :: Quality Assurance",
     "Topic :: Utilities",
 ]
 
 keywords = [
     "cli",
     "ai",
-    "mcp",
-    "gemini",
-    "groq",
+    "mcp"
     "developer-tools",
     "code-context",
     "llm",
-    "rag",
-    "code-understanding"
+    "rag"
 ]
 
 # Keep only essential runtime dependencies
