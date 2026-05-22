@@ -57,7 +57,7 @@ def engine(tmp_project, cfg):
 class TestConfig:
     def test_defaults_present(self, cfg):
         assert cfg.get("embedding_model") is not None
-        assert cfg.get("llm_provider") in ("gemini", "grok", "none")
+        assert cfg.get("llm_provider") in ("gemini", "groq", "none")
 
     def test_set_and_get(self, cfg):
         cfg.set("chunk_size", "256")
@@ -86,7 +86,7 @@ class TestConfig:
     def test_secret_keys_set(self, cfg):
         from ragebot.core.config import _SECRET_KEYS
         assert "gemini_api_key" in _SECRET_KEYS
-        assert "grok_api_key"   in _SECRET_KEYS
+        assert "groq_api_key"   in _SECRET_KEYS
 
     def test_get_all_masks_secrets(self, cfg):
         all_cfg = cfg.get_all()
@@ -94,7 +94,7 @@ class TestConfig:
         for k in cfg.secret_keys:
             val = all_cfg.get(k, "")
             # Should be empty or masked (not a long plain-text key)
-            assert len(val) == 0 or val.startswith("*") or len(val) <= 12
+            assert val == "✗ not set" or val == "✓ set" or (val.startswith("✓ set (") and val.endswith(")))
 
     def test_reset(self, cfg):
         cfg.set("chunk_size", "999")
@@ -113,11 +113,11 @@ class TestLLMProviders:
         assert p.is_available() is False
         assert "gemini" in p.name.lower()
 
-    def test_grok_not_available_without_key(self):
-        from ragebot.llm.grok import GrokProvider
-        p = GrokProvider(api_key="", model="grok-3-mini")
+    def test_groq_not_available_without_key(self):
+        from ragebot.llm.groq import GrokProvider
+        p = GrokProvider(api_key="", model="groq-3-mini")
         assert p.is_available() is False
-        assert "grok" in p.name.lower()
+        assert "groq" in p.name.lower()
 
     def test_noop_provider(self):
         from ragebot.llm.noop import NoopProvider
@@ -139,10 +139,10 @@ class TestLLMProviders:
         p = get_provider(cfg)
         assert isinstance(p, GeminiProvider)
 
-    def test_factory_returns_grok(self, cfg):
-        cfg.set("llm_provider", "grok")
+    def test_factory_returns_groq(self, cfg):
+        cfg.set("llm_provider", "groq")
         from ragebot.llm.factory import get_provider
-        from ragebot.llm.grok import GrokProvider
+        from ragebot.llm.groq import GrokProvider
         p = get_provider(cfg)
         assert isinstance(p, GrokProvider)
 

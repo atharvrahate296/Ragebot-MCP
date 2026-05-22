@@ -24,16 +24,17 @@ class GeminiProvider(BaseLLMProvider):
     No external dependencies required beyond Python stdlib.
     """
     
-    # All available Gemini models as of March 2025
+    # All available Gemini models as of May 2025
     AVAILABLE_MODELS = {
         # Gemini 2.0 models (latest)
-        "gemini-2.0-flash-exp": "Experimental Flash 2.0",
-        "gemini-2.0-flash-thinking-exp": "Experimental Flash 2.0 with thinking",
+        "gemini-2.0-flash": "Latest and fastest — best for most tasks",
+        "gemini-2.0-flash-lite": "Cost-efficient — lighter variant of 2.0 Flash",
+        "gemini-2.0-flash-thinking-exp": "Experimental: Flash 2.0 with extended thinking",
         
         # Gemini 1.5 models (stable)
-        "gemini-1.5-pro": "Most capable 1.5 model",
+        "gemini-1.5-pro": "Most capable model — best quality reasoning",
         "gemini-1.5-pro-002": "Stable Pro version 002",
-        "gemini-1.5-flash": "Fast and efficient",
+        "gemini-1.5-flash": "Fast and efficient — 1M token context",
         "gemini-1.5-flash-002": "Stable Flash version 002",
         "gemini-1.5-flash-8b": "Lightweight Flash variant",
         
@@ -220,14 +221,26 @@ class GeminiProvider(BaseLLMProvider):
         Raises:
             RageBotError: On authentication, rate limit, or API failures
         """
-        if not self._api_key:
+        # Validate API key early to avoid wasting retries
+        if not self._api_key or not self._api_key.strip():
             raise RageBotError(
-                "No Gemini API key configured",
+                "Gemini API key is empty",
                 category=ErrorCategory.AUTHENTICATION,
                 severity=ErrorSeverity.ERROR,
                 recovery_steps=[
                     "Run: rage auth login gemini",
                     "Get a free API key at: https://aistudio.google.com/apikey",
+                ],
+            )
+        
+        if len(self._api_key.strip()) < 20:
+            raise RageBotError(
+                "Gemini API key is too short (may be invalid)",
+                category=ErrorCategory.AUTHENTICATION,
+                severity=ErrorSeverity.ERROR,
+                recovery_steps=[
+                    "Verify you copied the complete API key",
+                    "Run: rage auth login gemini",
                 ],
             )
         
@@ -325,7 +338,7 @@ class GeminiProvider(BaseLLMProvider):
                 
                 # Rate limiting - attempt retry with exponential backoff
                 if e.code == 429:
-                    if attempt <= max_attempts:
+                    if attempt < max_attempts:
                         wait_time = 2 ** attempt
                         time.sleep(wait_time)
                         continue
