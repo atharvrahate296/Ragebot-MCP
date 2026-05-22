@@ -81,7 +81,7 @@ python-dotenv==1.2.2
 pywin32-ctypes==0.2.3
 PyYAML==6.0.3
 questionary==2.1.1
--e git+https://github.com/atharvrahate296/Ragebot-MCP@96e7a9740347d08167f5311c66cf661b299512f4#egg=ragebot_mcp
+-e git+https://github.com/atharvrahate296/Ragebot-MCP@f7fdbfea830c9374f75ea541e424ee5e45008342#egg=ragebot_mcp
 readme_renderer==44.0
 regex==2026.2.28
 requests==2.32.5

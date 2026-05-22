@@ -1,3 +1,3 @@
 """RageBot MCP — Intelligent Project Context Engine."""
-__version__ = "1.0.0"
-__author__  = "RageBot Team"
+__version__ = "1.0.4"
+__author__  = "RageBot"

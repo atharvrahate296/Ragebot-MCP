@@ -34,7 +34,7 @@ logger = logging.getLogger("ragebot.mcp")
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_INFO = {
     "name":    "ragebot-mcp",
-    "version": "1.0.0",
+    "version": "1.0.4",
 }
 
 # ── Tool definitions (JSON Schema) ────────────────────────────────────────────

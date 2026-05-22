@@ -694,7 +694,7 @@ def cmd_status(path: str = typer.Argument(".", help="Project directory")):
 @app.command("version")
 def cmd_version():
     """📌 Show version."""
-    console.print(Panel("[bold cyan]RageBot MCP[/bold cyan]  v1.0.0\nIntelligent Project Context Engine", border_style="cyan"))
+    console.print(Panel("[bold cyan]RageBot MCP[/bold cyan]  v1.0.4\nIntelligent Project Context Engine", border_style="cyan"))
 
 
 @app.command("explain")

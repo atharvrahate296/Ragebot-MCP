@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ragebot-mcp"
-version = "1.0.2"
+version = "1.0.4"
 
 description = "Intelligent CLI-based Project Context Engine with MCP server support"
 readme = "README.md"

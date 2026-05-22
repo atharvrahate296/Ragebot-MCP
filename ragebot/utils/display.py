@@ -32,7 +32,7 @@ class Display:
             "[bold cyan]██╔══██╗██╔══██║██║   ██║██╔══╝  ██╔══██╗██║   ██║   ██║   \n"
             "[bold cyan]██║  ██║██║  ██║╚██████╔╝███████╗██████╔╝╚██████╔╝   ██║   \n"
             "[bold cyan]╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═════╝  ╚═════╝    ╚═╝   \n\n"
-            "[dim]Intelligent Project Context Engine  •  v1.0.0[/dim]",
+            "[dim]Intelligent Project Context Engine  •  v1.0.4[/dim]",
             border_style="cyan",
             subtitle="[dim]github.com/ragebot/mcp[/dim]",
         ))
