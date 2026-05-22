@@ -1117,9 +1117,32 @@ def _do_login_interactive(provider: str | None = None):
         show_success_badge(console, message)
         # ── Post-auth mini status ──────────────────────────────────────
         try:
-            _prov_inst = provider_mgr.get_provider_instance()
             _model = config.get(f"{provider}_model", "default")
-            _ping_ok = _prov_inst.is_available()
+            if provider == "gemini":
+                from ragebot.llm.gemini import GeminiProvider
+                _prov_inst = GeminiProvider(
+                    api_key=config.get("gemini_api_key", ""),
+                    model=_model or "gemini-2.0-flash",
+                )
+            elif provider == "groq":
+                from ragebot.llm.groq import GroqProvider
+                _prov_inst = GroqProvider(
+                    api_key=config.get("groq_api_key", ""),
+                    model=_model or "openai/gpt-oss-120b",
+                )
+            elif provider == "ollama":
+                try:
+                    from ragebot.llm.ollama import OllamaProvider
+                    _prov_inst = OllamaProvider(
+                        model=_model or "llama3",
+                        base_url=config.get("ollama_base_url", "http://localhost:11434"),
+                    )
+                except RuntimeError:
+                    _prov_inst = None
+            else:
+                _prov_inst = None
+
+            _ping_ok = _prov_inst.is_available() if _prov_inst else False
             _ping_icon = "[bold green]✓[/bold green]" if _ping_ok else "[bold red]✗[/bold red]"
             _ping_label = "Connected" if _ping_ok else "Not reachable — check key"
             console.print(Panel(
