@@ -19,8 +19,6 @@ To install RageBot as a package, run:
 pip install ragebot
 ```
 
-*Note: For development or local setup from source, see the [Development](#-development) section.*
-
 ---
 
 ## ✨ Features
@@ -155,6 +153,10 @@ If you want to contribute or run from source:
    ```
 
 ---
+
+`Contributions from all collaborators are welcome for the continued development of RageBot MCP.`
+
+--- 
 
 ## 📄 License
 
