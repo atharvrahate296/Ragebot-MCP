@@ -150,11 +150,10 @@ class ProviderManager:
             self._current_provider = provider
             self._current_model = None  # Reset model
             
-            # Test connection
+            # Test connection but don't fail if it's down
             instance = self.get_provider_instance()
             if not instance.is_available():
-                self._last_error = f"Provider {provider} is not available"
-                return False
+                self.console.print(f"[yellow]⚠️  Warning: {provider} is not currently reachable. Configuration saved anyway.[/yellow]")
             
             return True
         except Exception as e:
@@ -188,18 +187,152 @@ class ProviderManager:
             return False, f"{provider} is not configured or API key is missing"
         
         try:
-            # Perform a lightweight test call
+            # Perform a lightweight test call with a simple prompt
             response = instance.complete(
-                "You are a test assistant. Respond with: 'OK'",
-                "Say OK",
-                max_tokens=10
+                system_prompt="You are a helpful assistant.",
+                user_prompt="Reply with exactly: SUCCESS",
+                max_tokens=50
             )
-            if "OK" in response or len(response) > 0:
+            
+            # Validate we got a meaningful response
+            if response and len(response.strip()) > 0:
                 return True, f"✓ {provider} connection successful"
             else:
-                return False, f"✗ {provider} returned empty response"
+                return False, f"✗ {provider} returned empty response - verify API key and try again"
         except Exception as e:
-            return False, f"✗ {provider} error: {str(e)}"
+            error_msg = str(e)
+            # Extract the important part of the error message
+            if "authentication" in error_msg.lower() or "401" in error_msg or "unauthorized" in error_msg.lower():
+                return False, f"✗ {provider}: Invalid API key - {error_msg}"
+            elif "rate" in error_msg.lower() or "429" in error_msg:
+                return False, f"✗ {provider}: Rate limited - wait and try again"
+            elif "connection" in error_msg.lower() or "network" in error_msg.lower():
+                return False, f"✗ {provider}: Network error - check internet connection"
+            else:
+                return False, f"✗ {provider} error: {error_msg}"
+    
+    def test_provider_for_auth(self, provider: str) -> tuple[bool, str]:
+        """Test a specific provider during authentication. Returns (success, message).
+        
+        This tests the provider being authenticated WITHOUT changing the current provider.
+        Used during login to validate credentials before switching.
+        """
+        if provider == "ollama":
+            return self._test_ollama_for_auth()
+        elif provider == "gemini":
+            return self._test_gemini_for_auth()
+        elif provider == "groq":
+            return self._test_groq_for_auth()
+        else:
+            return False, f"Unknown provider: {provider}"
+    
+    def _test_groq_for_auth(self) -> tuple[bool, str]:
+        """Test Groq credentials during authentication."""
+        try:
+            from ragebot.llm.groq import GroqProvider
+            api_key = self.config.get("groq_api_key", "")
+            if not api_key:
+                return False, "No Groq API key configured"
+            
+            instance = GroqProvider(
+                api_key=api_key,
+                model=self.config.get("groq_model", "openai/gpt-oss-120b"),
+            )
+            
+            if not instance.is_available():
+                return False, "Groq API key is missing or invalid"
+            
+            response = instance.complete(
+                system_prompt="You are a helpful assistant.",
+                user_prompt="Reply with exactly: SUCCESS",
+                max_tokens=50
+            )
+            
+            if response and len(response.strip()) > 0:
+                return True, "✓ Groq connection successful"
+            else:
+                return False, "✗ Groq returned empty response"
+        except Exception as e:
+            error_msg = str(e)
+            if "authentication" in error_msg.lower() or "401" in error_msg or "unauthorized" in error_msg.lower():
+                return False, f"Invalid API key: {error_msg}"
+            elif "rate" in error_msg.lower() or "429" in error_msg:
+                return False, f"Rate limited: {error_msg}"
+            elif "connection" in error_msg.lower() or "network" in error_msg.lower():
+                return False, f"Network error: {error_msg}"
+            else:
+                return False, f"Connection test failed: {error_msg}"
+    
+    def _test_gemini_for_auth(self) -> tuple[bool, str]:
+        """Test Gemini credentials during authentication."""
+        try:
+            from ragebot.llm.gemini import GeminiProvider
+            api_key = self.config.get("gemini_api_key", "")
+            if not api_key:
+                return False, "No Gemini API key configured"
+            
+            instance = GeminiProvider(
+                api_key=api_key,
+                model=self.config.get("gemini_model", "gemini-2.0-flash"),
+            )
+            
+            if not instance.is_available():
+                return False, "Gemini API key is missing or invalid"
+            
+            response = instance.complete(
+                system_prompt="You are a helpful assistant.",
+                user_prompt="Reply with exactly: SUCCESS",
+                max_tokens=50
+            )
+            
+            if response and len(response.strip()) > 0:
+                return True, "✓ Gemini connection successful"
+            else:
+                return False, "✗ Gemini returned empty response"
+        except Exception as e:
+            error_msg = str(e)
+            if "authentication" in error_msg.lower() or "401" in error_msg or "unauthorized" in error_msg.lower():
+                return False, f"Invalid API key: {error_msg}"
+            elif "rate" in error_msg.lower() or "429" in error_msg:
+                return False, f"Rate limited: {error_msg}"
+            elif "connection" in error_msg.lower() or "network" in error_msg.lower():
+                return False, f"Network error: {error_msg}"
+            else:
+                return False, f"Connection test failed: {error_msg}"
+    
+    def _test_ollama_for_auth(self) -> tuple[bool, str]:
+        """Test Ollama connection during authentication."""
+        try:
+            from ragebot.llm.ollama import OllamaProvider
+            base_url = self.config.get("ollama_base_url", "http://localhost:11434")
+            model = self.config.get("ollama_model", "llama3")
+            
+            instance = OllamaProvider(
+                model=model,
+                base_url=base_url,
+            )
+            
+            if not instance.is_available():
+                return False, f"Cannot reach Ollama at {base_url}"
+            
+            response = instance.complete(
+                system_prompt="You are a helpful assistant.",
+                user_prompt="Reply with exactly: SUCCESS",
+                max_tokens=50
+            )
+            
+            if response and len(response.strip()) > 0:
+                return True, "✓ Ollama connection successful"
+            else:
+                return False, "✗ Ollama returned empty response"
+        except Exception as e:
+            error_msg = str(e)
+            if "connection" in error_msg.lower() or "refused" in error_msg.lower():
+                return False, f"Cannot connect to Ollama: {error_msg}"
+            elif "timeout" in error_msg.lower():
+                return False, f"Ollama timeout: {error_msg}"
+            else:
+                return False, f"Connection test failed: {error_msg}"
     
     def display_provider_status(self) -> None:
         """Display current provider and model status."""

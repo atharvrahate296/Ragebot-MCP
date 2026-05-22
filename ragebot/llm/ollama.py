@@ -163,13 +163,22 @@ class OllamaProvider(BaseLLMProvider):
 
     def is_available(self) -> bool:
         """Check if the Ollama server is reachable and has models available."""
+        from ragebot.utils.error_handler import RageBotError
+        
         try:
             resp = requests.head(
                 f"{self.base_url}/api/tags",
                 timeout=self.REQUEST_TIMEOUT,
             )
             return resp.status_code == 200 and len(self.MODELS) > 0
-        except requests.RequestException:
+        except requests.ConnectionError:
+            logger.warning(f"Ollama server not reachable at {self.base_url}")
+            return False
+        except requests.Timeout:
+            logger.warning(f"Ollama server timeout at {self.base_url}")
+            return False
+        except Exception as e:
+            logger.warning(f"Failed to check Ollama availability: {e}")
             return False
 
     def complete(
@@ -178,7 +187,13 @@ class OllamaProvider(BaseLLMProvider):
         user_prompt: str,
         max_tokens: int = 1000,
     ) -> str:
-        """Generate a text completion using the Ollama model."""
+        """Generate a text completion using the Ollama model.
+        
+        Raises:
+            RageBotError: On connection failure or model errors
+        """
+        from ragebot.utils.error_handler import RageBotError, ErrorCategory, ErrorSeverity
+        
         try:
             response = self.client.chat.completions.create(
                 model=self.model,
@@ -189,25 +204,72 @@ class OllamaProvider(BaseLLMProvider):
                 max_tokens=max_tokens,
                 temperature=0.7,
             )
-            return response.choices[0].message.content or ""
+            
+            # Validate response structure
+            if not response.choices or not response.choices[0].message.content:
+                raise RageBotError(
+                    "Ollama returned empty response",
+                    category=ErrorCategory.PROVIDER_FAILURE,
+                    severity=ErrorSeverity.ERROR,
+                    recovery_steps=[
+                        f"Check model is running: ollama list",
+                        f"Try switching provider: rage auth",
+                    ],
+                )
+            
+            return response.choices[0].message.content
+        
+        except RageBotError:
+            raise
         except Exception as e:
             error_msg = str(e)
             logger.error(f"Ollama completion failed: {e}")
-            if "404" in error_msg:
-                return (
-                    f"[Ollama error] Model '{self.model}' not found or endpoint unreachable.\n"
-                    "Recovery steps:\n"
-                    "  1. Verify Ollama is running: ollama serve\n"
-                    f"  2. Check model is installed: ollama list\n"
-                    f"  3. Pull the model if needed: ollama pull {self.model}\n"
-                    "  4. Try switching provider: rage auth"
-                )
-            if "connection" in error_msg.lower() or "refused" in error_msg.lower():
-                return (
-                    "[Ollama error] Cannot connect to Ollama server.\n"
-                    "Recovery steps:\n"
-                    "  1. Start Ollama: ollama serve\n"
-                    "  2. Check it's running on the correct port (default: 11434)\n"
-                    "  3. Try switching provider: rage auth"
-                )
-            return f"[Ollama error: {e}]"
+            
+            # Model not found or endpoint unreachable
+            if "404" in error_msg or "not found" in error_msg.lower():
+                raise RageBotError(
+                    f"Ollama model '{self.model}' not found or endpoint unreachable",
+                    category=ErrorCategory.PROVIDER_FAILURE,
+                    severity=ErrorSeverity.ERROR,
+                    recovery_steps=[
+                        "1. Verify Ollama is running: ollama serve",
+                        f"2. Check model is installed: ollama list",
+                        f"3. Pull the model if needed: ollama pull {self.model}",
+                        "4. Try switching provider: rage auth",
+                    ],
+                ) from e
+            
+            # Connection failures
+            if "connection" in error_msg.lower() or "refused" in error_msg.lower() or "unreachable" in error_msg.lower():
+                raise RageBotError(
+                    f"Cannot connect to Ollama server at {self.base_url}",
+                    category=ErrorCategory.NETWORK,
+                    severity=ErrorSeverity.ERROR,
+                    recovery_steps=[
+                        "1. Start Ollama: ollama serve",
+                        f"2. Check it's running on the correct port (default: 11434)",
+                        "3. Verify base_url is correct",
+                        "4. Try switching provider: rage auth",
+                    ],
+                ) from e
+            
+            # Timeout
+            if "timeout" in error_msg.lower():
+                raise RageBotError(
+                    f"Ollama request timed out",
+                    category=ErrorCategory.NETWORK,
+                    severity=ErrorSeverity.ERROR,
+                    recovery_steps=[
+                        "1. Check if Ollama server is responsive",
+                        "2. Try a smaller model for faster responses",
+                        "3. Increase timeout if needed",
+                    ],
+                ) from e
+            
+            # Generic error
+            raise RageBotError(
+                f"Ollama API error: {error_msg}",
+                category=ErrorCategory.PROVIDER_FAILURE,
+                severity=ErrorSeverity.ERROR,
+                context={"error_type": type(e).__name__, "model": self.model},
+            ) from e

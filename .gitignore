@@ -8,7 +8,9 @@ build/
 .eggs/
 *.egg
 .locks/
-models--sentence-transformers--all-MiniLM-L6-v2/
+.locks/*
+models--sentence-transformers--all-MiniLM-L6-v2/*
+/models--sentence-transformers--all-MiniLM-L6-v2
 # Virtual environments
 .venv/
 venv/
@@ -43,3 +45,6 @@ Thumbs.db
 
 # Distribution files
 dist/*
+
+src/*
+/src

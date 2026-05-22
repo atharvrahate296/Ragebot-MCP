@@ -24,16 +24,17 @@ class GeminiProvider(BaseLLMProvider):
     No external dependencies required beyond Python stdlib.
     """
     
-    # All available Gemini models as of March 2025
+    # All available Gemini models as of May 2025
     AVAILABLE_MODELS = {
         # Gemini 2.0 models (latest)
-        "gemini-2.0-flash-exp": "Experimental Flash 2.0",
-        "gemini-2.0-flash-thinking-exp": "Experimental Flash 2.0 with thinking",
+        "gemini-2.0-flash": "Latest and fastest — best for most tasks",
+        "gemini-2.0-flash-lite": "Cost-efficient — lighter variant of 2.0 Flash",
+        "gemini-2.0-flash-thinking-exp": "Experimental: Flash 2.0 with extended thinking",
         
         # Gemini 1.5 models (stable)
-        "gemini-1.5-pro": "Most capable 1.5 model",
+        "gemini-1.5-pro": "Most capable model — best quality reasoning",
         "gemini-1.5-pro-002": "Stable Pro version 002",
-        "gemini-1.5-flash": "Fast and efficient",
+        "gemini-1.5-flash": "Fast and efficient — 1M token context",
         "gemini-1.5-flash-002": "Stable Flash version 002",
         "gemini-1.5-flash-8b": "Lightweight Flash variant",
         
@@ -215,18 +216,33 @@ class GeminiProvider(BaseLLMProvider):
             temperature: Sampling temperature 0.0-2.0 (default: 1.0)
         
         Returns:
-            Generated text response or error message
+            Generated text response
+            
+        Raises:
+            RageBotError: On authentication, rate limit, or API failures
         """
-        # Test connection on first use
-        if not self._connection_tested:
-            self._connection_tested = True
-            success, message = self._test_connection()
-            print(f"\n{message}\n")
-            if not success:
-                return f"{message}\n\nCannot proceed with generation."
+        # Validate API key early to avoid wasting retries
+        if not self._api_key or not self._api_key.strip():
+            raise RageBotError(
+                "Gemini API key is empty",
+                category=ErrorCategory.AUTHENTICATION,
+                severity=ErrorSeverity.ERROR,
+                recovery_steps=[
+                    "Run: rage auth login gemini",
+                    "Get a free API key at: https://aistudio.google.com/apikey",
+                ],
+            )
         
-        if not self._api_key:
-            return "❌ No Gemini API key configured. Run:  rage auth  to set up your provider."
+        if len(self._api_key.strip()) < 20:
+            raise RageBotError(
+                "Gemini API key is too short (may be invalid)",
+                category=ErrorCategory.AUTHENTICATION,
+                severity=ErrorSeverity.ERROR,
+                recovery_steps=[
+                    "Verify you copied the complete API key",
+                    "Run: rage auth login gemini",
+                ],
+            )
         
         # Build the full conversation
         # Gemini doesn't have a separate system role, so we include it in the first user message
@@ -264,8 +280,16 @@ class GeminiProvider(BaseLLMProvider):
                     if 'promptFeedback' in result:
                         feedback = result['promptFeedback']
                         if feedback.get('blockReason'):
-                            return f"⚠️  Content blocked: {feedback.get('blockReason')}"
-                    return "⚠️  No response generated. The prompt may have been filtered."
+                            raise RageBotError(
+                                f"Content blocked by safety filter: {feedback.get('blockReason')}",
+                                category=ErrorCategory.PROVIDER_FAILURE,
+                                severity=ErrorSeverity.WARNING,
+                            )
+                    raise RageBotError(
+                        "Gemini returned no response content",
+                        category=ErrorCategory.PROVIDER_FAILURE,
+                        severity=ErrorSeverity.ERROR,
+                    )
                 
                 content = candidates[0].get('content', {})
                 parts = content.get('parts', [])
@@ -273,34 +297,167 @@ class GeminiProvider(BaseLLMProvider):
                 if not parts:
                     finish_reason = candidates[0].get('finishReason', 'UNKNOWN')
                     if finish_reason == 'SAFETY':
-                        return "⚠️  Response blocked due to safety filters."
+                        raise RageBotError(
+                            "Response blocked due to safety filters",
+                            category=ErrorCategory.PROVIDER_FAILURE,
+                            severity=ErrorSeverity.WARNING,
+                        )
                     elif finish_reason == 'MAX_TOKENS':
-                        return f"⚠️  Response truncated (hit {max_tokens} token limit). Try increasing max_tokens."
+                        raise RageBotError(
+                            f"Response truncated (hit {max_tokens} token limit)",
+                            category=ErrorCategory.PROVIDER_FAILURE,
+                            severity=ErrorSeverity.WARNING,
+                            recovery_steps=["Try increasing max_tokens"],
+                        )
                     else:
-                        return f"⚠️  Generation stopped: {finish_reason}"
+                        raise RageBotError(
+                            f"Generation stopped: {finish_reason}",
+                            category=ErrorCategory.PROVIDER_FAILURE,
+                            severity=ErrorSeverity.ERROR,
+                        )
                 
-                return parts[0].get('text', '').strip()
+                text = parts[0].get('text', '').strip()
+                if not text:
+                    raise RageBotError(
+                        "Gemini returned empty text content",
+                        category=ErrorCategory.PROVIDER_FAILURE,
+                        severity=ErrorSeverity.ERROR,
+                    )
+                
+                return text
             
+            except RageBotError:
+                raise
             except HTTPError as e:
-                error_msg = self._handle_api_error(e, attempt)
-                if error_msg is None:
-                    # Retry signal
-                    continue
-                return error_msg
+                error_body = e.read().decode('utf-8', errors='replace')
+                try:
+                    error_data = json.loads(error_body)
+                    error_msg = error_data.get('error', {}).get('message', str(e))
+                except:
+                    error_msg = str(e)
+                
+                # Rate limiting - attempt retry with exponential backoff
+                if e.code == 429:
+                    if attempt < max_attempts:
+                        wait_time = 2 ** attempt
+                        time.sleep(wait_time)
+                        continue
+                    else:
+                        raise RageBotError(
+                            "Gemini rate limit exceeded",
+                            category=ErrorCategory.RATE_LIMIT,
+                            severity=ErrorSeverity.WARNING,
+                            recovery_steps=[
+                                "Wait a few minutes and retry",
+                                "Upgrade quota at https://aistudio.google.com/app/apikey",
+                                "Switch to gemini-1.5-flash (higher rate limits)",
+                            ],
+                            context={"provider": "gemini", "model": self._model},
+                        ) from e
+                
+                # Authentication errors
+                if e.code in (401, 403):
+                    raise RageBotError(
+                        f"Gemini authentication failed - invalid API key",
+                        category=ErrorCategory.AUTHENTICATION,
+                        severity=ErrorSeverity.ERROR,
+                        recovery_steps=[
+                            "Run: rage auth login gemini",
+                            "Verify key at https://aistudio.google.com/app/apikey",
+                        ],
+                    ) from e
+                
+                # Invalid request
+                if e.code == 400:
+                    if "quota" in error_msg.lower() or "exceeded" in error_msg.lower():
+                        raise RageBotError(
+                            f"Gemini quota exceeded",
+                            category=ErrorCategory.RATE_LIMIT,
+                            severity=ErrorSeverity.WARNING,
+                            recovery_steps=[
+                                "Check quota at https://aistudio.google.com/app/apikey",
+                                "Upgrade your plan or try tomorrow",
+                            ],
+                        ) from e
+                    else:
+                        raise RageBotError(
+                            f"Invalid request: {error_msg}",
+                            category=ErrorCategory.PROVIDER_FAILURE,
+                            severity=ErrorSeverity.ERROR,
+                        ) from e
+                
+                # Model not found
+                if e.code == 404:
+                    available = ", ".join(list(self.AVAILABLE_MODELS.keys())[:5])
+                    raise RageBotError(
+                        f"Model '{self._model}' not found",
+                        category=ErrorCategory.PROVIDER_FAILURE,
+                        severity=ErrorSeverity.ERROR,
+                        recovery_steps=[
+                            f"Use a valid model: {available}...",
+                            "Full list: https://ai.google.dev/models/gemini",
+                        ],
+                    ) from e
+                
+                # Service unavailable - retry
+                if e.code in (500, 502, 503, 504):
+                    if attempt < max_attempts:
+                        wait_time = 3 * attempt
+                        time.sleep(wait_time)
+                        continue
+                    else:
+                        raise RageBotError(
+                            f"Gemini service unavailable (HTTP {e.code})",
+                            category=ErrorCategory.NETWORK,
+                            severity=ErrorSeverity.ERROR,
+                            recovery_steps=[
+                                "The service may be experiencing issues",
+                                "Please try again later",
+                            ],
+                        ) from e
+                
+                # Generic HTTP error
+                raise RageBotError(
+                    f"Gemini API error (HTTP {e.code}): {error_msg}",
+                    category=ErrorCategory.PROVIDER_FAILURE,
+                    severity=ErrorSeverity.ERROR,
+                ) from e
             
             except URLError as e:
-                return f"❌ Network error: {e.reason}\nPlease check your internet connection."
+                if attempt < max_attempts:
+                    time.sleep(2)
+                    continue
+                raise RageBotError(
+                    f"Gemini network error",
+                    category=ErrorCategory.NETWORK,
+                    severity=ErrorSeverity.ERROR,
+                    recovery_steps=[
+                        "Check your internet connection",
+                        "Verify Gemini API is accessible",
+                        "Try again in a moment",
+                    ],
+                ) from e
             
             except json.JSONDecodeError as e:
-                return f"❌ Failed to parse API response: {e}"
-            
-            except KeyError as e:
-                return f"❌ Unexpected API response format: missing key {e}"
+                raise RageBotError(
+                    f"Failed to parse Gemini API response",
+                    category=ErrorCategory.PROVIDER_FAILURE,
+                    severity=ErrorSeverity.ERROR,
+                ) from e
             
             except Exception as e:
-                return f"❌ Unexpected error: {type(e).__name__}: {str(e)}"
+                raise RageBotError(
+                    f"Gemini API error: {str(e)}",
+                    category=ErrorCategory.PROVIDER_FAILURE,
+                    severity=ErrorSeverity.ERROR,
+                    context={"error_type": type(e).__name__},
+                ) from e
         
-        return "❌ Maximum retry attempts exceeded. Please try again later."
+        raise RageBotError(
+            "Maximum retry attempts exceeded",
+            category=ErrorCategory.PROVIDER_FAILURE,
+            severity=ErrorSeverity.ERROR,
+        )
 
 
 # Utility function to list available models

@@ -76,7 +76,7 @@ class ProviderAuthenticator:
             refresh_per_second=10,
             transient=True,
         ):
-            success, msg = self.provider_mgr.test_provider_connection()
+            success, msg = self.provider_mgr.test_provider_for_auth("gemini")
 
         if success:
             self.console.print(
@@ -85,46 +85,52 @@ class ProviderAuthenticator:
                     border_style="green", padding=(0, 2), expand=False,
                 )
             )
-
-            # Let user select a model
-            models = self.provider_mgr.list_available_models("gemini")
-            if models:
-                self.console.print(Panel(
-                    "[bold]Select a Gemini model:[/bold]",
-                    border_style="cyan",
-                    padding=(0, 2)
-                ))
-                for i, m in enumerate(models, 1):
-                    self.console.print(f"  {i}. {m['name']:<30} ({m['id']})")
-                
-                try:
-                    choice = int(self.console.input("\n[bold]Select model (number):[/bold] ").strip())
-                    if 1 <= choice <= len(models):
-                        selected = models[choice - 1]
-                        self.config.set("gemini_model", selected["id"])
-                        self.config.set("llm_provider", "gemini")
-                        return True, (
-                            f"✓ Gemini authenticated successfully\n"
-                            f"[green]Model: {selected['name']}[/green]"
-                        )
-                except (ValueError, IndexError):
-                    return False, "Invalid model selection."
-            
-            # Fallback: use default model
-            self.config.set("llm_provider", "gemini")
-            return True, "✓ Gemini authenticated successfully (using default model)"
         else:
             self.console.print(
                 Panel(
                     f"[bold red]✗  Connection failed[/bold red]\n"
                     f"[dim]{msg}[/dim]\n\n"
-                    f"[yellow]💡 Check your key or network, then retry:[/yellow]\n"
-                    f"  rage auth login gemini",
+                    f"[yellow]💡 The API key has been saved, but we couldn't verify it.[/yellow]\n"
+                    f"Check your key or network connection.",
                     border_style="red", padding=(1, 2),
                 )
             )
-            self.config.delete_secret("gemini_api_key")
-            return False, "Connection test failed."
+            if not Confirm.ask("[bold]Continue with this provider anyway?[/bold]", default=True):
+                self.config.delete_secret("gemini_api_key")
+                return False, "Authentication cancelled by user."
+
+        # Let user select a model
+        models = self.provider_mgr.list_available_models("gemini")
+        if models:
+            self.console.print(Panel(
+                "[bold]Select a Gemini model:[/bold]",
+                border_style="cyan",
+                padding=(0, 2)
+            ))
+            for i, m in enumerate(models, 1):
+                self.console.print(f"  {i}. {m['name']:<30} ({m['id']})")
+            
+            try:
+                choice = self.console.input("\n[bold]Select model (number, default 1):[/bold] ").strip()
+                if not choice:
+                    choice_idx = 0
+                else:
+                    choice_idx = int(choice) - 1
+                
+                if 0 <= choice_idx < len(models):
+                    selected = models[choice_idx]
+                    self.config.set("gemini_model", selected["id"])
+                    self.config.set("llm_provider", "gemini")
+                    return True, (
+                        f"✓ Gemini configured successfully\n"
+                        f"[green]Model: {selected['name']}[/green]"
+                    )
+            except (ValueError, IndexError):
+                self.console.print("[yellow]Invalid choice, using default model.[/yellow]")
+        
+        # Fallback: use default model
+        self.config.set("llm_provider", "gemini")
+        return True, "✓ Gemini configured successfully (using default model)"
 
     
     def _auth_groq(self) -> tuple[bool, str]:
@@ -153,7 +159,7 @@ class ProviderAuthenticator:
             refresh_per_second=10,
             transient=True,
         ):
-            success, msg = self.provider_mgr.test_provider_connection()
+            success, msg = self.provider_mgr.test_provider_for_auth("groq")
 
         if success:
             self.console.print(
@@ -162,73 +168,96 @@ class ProviderAuthenticator:
                     border_style="green", padding=(0, 2), expand=False,
                 )
             )
-
-            # Select model
-            models = self.provider_mgr.list_available_models("groq")
-            if models:
-                self.console.print(Panel(
-                    "[bold]Select a Groq model:[/bold]",
-                    border_style="green",
-                    padding=(0, 2)
-                ))
-                for i, m in enumerate(models, 1):
-                    self.console.print(f"  {i}. {m['name']:<30} ({m['id']})")
-                
-                try:
-                    choice = int(self.console.input("\n[bold]Select model (number):[/bold] ").strip())
-                    if 1 <= choice <= len(models):
-                        selected = models[choice - 1]
-                        self.config.set("groq_model", selected["id"])
-                        self.config.set("llm_provider", "groq")
-                        return True, (
-                            f"✓ Groq authenticated successfully\n"
-                            f"[green]Model: {selected['name']}[/green]"
-                        )
-                except (ValueError, IndexError):
-                    return False, "Invalid model selection."
-            
-            self.config.set("llm_provider", "groq")
-            return True, "✓ Groq authenticated successfully"
         else:
             self.console.print(
                 Panel(
                     f"[bold red]✗  Connection failed[/bold red]\n"
                     f"[dim]{msg}[/dim]\n\n"
-                    f"[yellow]💡 Check your key or network, then retry:[/yellow]\n"
-                    f"  rage auth login groq",
+                    f"[yellow]💡 The API key has been saved, but we couldn't verify it.[/yellow]\n"
+                    f"Check your key or network connection.",
                     border_style="red", padding=(1, 2),
                 )
             )
-            self.config.delete_secret("groq_api_key")
-            return False, "Connection test failed."
+            if not Confirm.ask("[bold]Continue with this provider anyway?[/bold]", default=True):
+                self.config.delete_secret("groq_api_key")
+                return False, "Authentication cancelled by user."
+
+        # Select model
+        models = self.provider_mgr.list_available_models("groq")
+        if models:
+            self.console.print(Panel(
+                "[bold]Select a Groq model:[/bold]",
+                border_style="green",
+                padding=(0, 2)
+            ))
+            for i, m in enumerate(models, 1):
+                self.console.print(f"  {i}. {m['name']:<30} ({m['id']})")
+            
+            try:
+                choice = self.console.input("\n[bold]Select model (number, default 1):[/bold] ").strip()
+                if not choice:
+                    choice_idx = 0
+                else:
+                    choice_idx = int(choice) - 1
+                
+                if 0 <= choice_idx < len(models):
+                    selected = models[choice_idx]
+                    self.config.set("groq_model", selected["id"])
+                    self.config.set("llm_provider", "groq")
+                    return True, (
+                        f"✓ Groq configured successfully\n"
+                        f"[green]Model: {selected['name']}[/green]"
+                    )
+            except (ValueError, IndexError):
+                self.console.print("[yellow]Invalid choice, using default model.[/yellow]")
+        
+        self.config.set("llm_provider", "groq")
+        return True, "✓ Groq configured successfully"
     
     def _auth_ollama(self) -> tuple[bool, str]:
         """Authenticate with local Ollama instance."""
-        # Test connection to Ollama with a spinner (no verbose setup panel)
+        # Test connection to Ollama with a spinner
         from rich.live import Live
         from rich.spinner import Spinner
         self.console.print()
+        
+        success = False
+        msg = ""
         with Live(
             Spinner("dots", text="[cyan]Connecting to Ollama…[/cyan]"),
             refresh_per_second=10,
             transient=True,
         ):
-            success, msg = self.provider_mgr.test_provider_connection()
+            success, msg = self.provider_mgr.test_provider_for_auth("ollama")
         
         if not success:
-            return False, (
-                f"✗ Cannot connect to Ollama\n"
-                f"[yellow]{msg}[/yellow]\n\n"
-                f"[dim]Start Ollama with:[/dim] [bold]ollama serve[/bold]"
-            )
+            self.console.print(Panel(
+                f"[bold red]✗  Cannot connect to Ollama[/bold red]\n"
+                f"[dim]{msg}[/dim]\n\n"
+                f"[yellow]💡 Ollama might not be running or is on a different port.[/yellow]\n"
+                f"Start Ollama with: [bold]ollama serve[/bold]",
+                border_style="red", padding=(1, 2),
+            ))
+            if not Confirm.ask("[bold]Continue with Ollama anyway?[/bold]", default=True):
+                return False, "Authentication cancelled by user."
         
         # Discover available models
         models = self.provider_mgr.list_available_models("ollama")
         if not models:
-            return False, (
-                "✗ Ollama is running but no models found\n"
-                "[dim]Install a model with:[/dim] [bold]ollama pull llama3[/bold]"
-            )
+            if success:
+                # Connected but no models
+                return False, (
+                    "✗ Ollama is running but no models found\n"
+                    "[dim]Install a model with:[/dim] [bold]ollama pull llama3[/bold]"
+                )
+            else:
+                # Not connected, using default model name
+                self.config.set("ollama_model", "llama3")
+                self.config.set("llm_provider", "ollama")
+                return True, (
+                    "✓ Ollama configured with default model 'llama3'\n"
+                    "[yellow]Note: Ollama is currently unreachable.[/yellow]"
+                )
         
         # Display models and let user select
         self.console.print(Panel(
@@ -240,17 +269,26 @@ class ProviderAuthenticator:
             self.console.print(f"  {i}. {m['id']}")
         
         try:
-            choice = int(self.console.input("\n[bold]Select model (number):[/bold] ").strip())
-            if 1 <= choice <= len(models):
-                selected = models[choice - 1]
+            choice = self.console.input("\n[bold]Select model (number, default 1):[/bold] ").strip()
+            if not choice:
+                choice_idx = 0
+            else:
+                choice_idx = int(choice) - 1
+            
+            if 0 <= choice_idx < len(models):
+                selected = models[choice_idx]
                 self.config.set("ollama_model", selected["id"])
                 self.config.set("llm_provider", "ollama")
                 return True, (
-                    f"✓ Ollama authenticated successfully\n"
+                    f"✓ Ollama configured successfully\n"
                     f"[green]Model: {selected['id']}[/green]"
                 )
         except (ValueError, IndexError):
-            return False, "Invalid model selection."
+            self.console.print("[yellow]Invalid choice, using first available model.[/yellow]")
+            selected = models[0]
+            self.config.set("ollama_model", selected["id"])
+            self.config.set("llm_provider", "ollama")
+            return True, f"✓ Ollama configured with {selected['id']}"
         
         return False, "Model selection cancelled."
     
