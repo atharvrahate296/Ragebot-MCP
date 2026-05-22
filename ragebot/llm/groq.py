@@ -38,6 +38,7 @@ class GroqProvider(BaseLLMProvider):
                 self._client = openai.OpenAI(
                     api_key=self._api_key,
                     base_url=self._base_url,
+                    timeout=10.0,
                 )
             except ImportError as exc:
                 raise RuntimeError(
@@ -56,10 +57,42 @@ class GroqProvider(BaseLLMProvider):
                 ],
                 max_tokens=max_tokens,
             )
-            return response.choices[0].message.content or ""
+            
+            # Validate response structure
+            if not response.choices or not response.choices[0].message.content:
+                raise RageBotError(
+                    "Groq API returned empty response",
+                    category=ErrorCategory.PROVIDER_FAILURE,
+                    severity=ErrorSeverity.ERROR,
+                    recovery_steps=[
+                        "Check your API key validity",
+                        "Try again: rage auth login groq",
+                        "Check Groq service status",
+                    ],
+                )
+            
+            return response.choices[0].message.content
+        except RageBotError:
+            raise
         except Exception as exc:
+            import openai  # type: ignore
             msg = str(exc)
-            if "rate_limit" in msg.lower() or "429" in msg:
+            exc_type = type(exc).__name__
+            
+            # Handle specific OpenAI library exceptions
+            if isinstance(exc, openai.AuthenticationError) or "401" in msg or "authentication" in msg.lower() or "unauthorized" in msg.lower():
+                raise RageBotError(
+                    "Groq authentication failed - invalid API key",
+                    category=ErrorCategory.AUTHENTICATION,
+                    severity=ErrorSeverity.ERROR,
+                    recovery_steps=[
+                        "Verify your API key at: https://console.groq.com/keys",
+                        "Re-authenticate: rage auth login groq",
+                        "Ensure key has proper permissions",
+                    ],
+                    context={"provider": "groq", "error_type": exc_type},
+                ) from exc
+            if isinstance(exc, openai.RateLimitError) or "rate_limit" in msg.lower() or "429" in msg:
                 raise RageBotError(
                     "Groq rate limit exceeded",
                     category=ErrorCategory.RATE_LIMIT,
@@ -70,29 +103,21 @@ class GroqProvider(BaseLLMProvider):
                     ],
                     context={"provider": "groq", "model": self._model},
                 ) from exc
-            if "401" in msg or "auth" in msg.lower() or "invalid" in msg.lower():
+            if isinstance(exc, openai.APIConnectionError) or "connection" in msg.lower() or "network" in msg.lower():
                 raise RageBotError(
-                    "Groq authentication failed",
-                    category=ErrorCategory.AUTHENTICATION,
-                    severity=ErrorSeverity.ERROR,
-                    recovery_steps=[
-                        "Run: rage auth login groq",
-                        "Get a new key at: https://console.groq.com/keys",
-                    ],
-                ) from exc
-            if "connection" in msg.lower() or "network" in msg.lower():
-                raise RageBotError(
-                    f"Groq API error: {exc}",
+                    f"Groq connection failed",
                     category=ErrorCategory.NETWORK,
                     severity=ErrorSeverity.ERROR,
                     recovery_steps=[
                         "Check your internet connection",
                         "Try again in a moment",
-                        "Switch provider: rage auth",
+                        "Verify Groq API is accessible: https://api.groq.com",
                     ],
+                    context={"provider": "groq", "error_type": exc_type},
                 ) from exc
             raise RageBotError(
                 f"Groq API error: {exc}",
                 category=ErrorCategory.PROVIDER_FAILURE,
                 severity=ErrorSeverity.ERROR,
+                context={"provider": "groq", "error_type": exc_type, "model": self._model},
             ) from exc

@@ -188,18 +188,29 @@ class ProviderManager:
             return False, f"{provider} is not configured or API key is missing"
         
         try:
-            # Perform a lightweight test call
+            # Perform a lightweight test call with a simple prompt
             response = instance.complete(
-                "You are a test assistant. Respond with: 'OK'",
-                "Say OK",
-                max_tokens=10
+                system_prompt="You are a helpful assistant.",
+                user_prompt="Reply with exactly: SUCCESS",
+                max_tokens=50
             )
-            if "OK" in response or len(response) > 0:
+            
+            # Validate we got a meaningful response
+            if response and len(response.strip()) > 0:
                 return True, f"✓ {provider} connection successful"
             else:
-                return False, f"✗ {provider} returned empty response"
+                return False, f"✗ {provider} returned empty response - verify API key and try again"
         except Exception as e:
-            return False, f"✗ {provider} error: {str(e)}"
+            error_msg = str(e)
+            # Extract the important part of the error message
+            if "authentication" in error_msg.lower() or "401" in error_msg or "unauthorized" in error_msg.lower():
+                return False, f"✗ {provider}: Invalid API key - {error_msg}"
+            elif "rate" in error_msg.lower() or "429" in error_msg:
+                return False, f"✗ {provider}: Rate limited - wait and try again"
+            elif "connection" in error_msg.lower() or "network" in error_msg.lower():
+                return False, f"✗ {provider}: Network error - check internet connection"
+            else:
+                return False, f"✗ {provider} error: {error_msg}"
     
     def display_provider_status(self) -> None:
         """Display current provider and model status."""
