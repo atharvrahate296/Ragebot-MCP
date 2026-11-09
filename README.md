@@ -16,7 +16,7 @@
 To install RageBot as a package, run:
 
 ```bash
-pip install ragebot
+pip install ragebot-mcp
 ```
 
 ---
